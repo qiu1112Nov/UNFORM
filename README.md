@@ -46,20 +46,20 @@ WASM 与应用同源加载，模型需要连接 `storage.googleapis.com`。若�
 
 ## GitHub Pages 部署（HTTPS）
 
-仓库附有 `.github/workflows/pages.yml`。部署会公开网站；以下为操作步骤，**不表示已经部署**。
+仓库附有 `.github/workflows/deploy.yml`。`main` 更新或手动触发时，工作流执行 `npm ci`、`npm test`、`npm run build`，再将 `dist` 发布到 Pages。部署会公开网站；以下为操作步骤，**不表示已经部署**。
 
 1. 将开发分支 PR 合并到 `main`。
 2. 在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
 3. 在 **Actions → Deploy to GitHub Pages → Run workflow** 中选择 `main` 手动触发；之后推送到 main 会自动构建部署。
-4. 等待 build 和 deploy 成功，从 Pages 设置或部署环境读取真实 HTTPS 地址。通常为 `https://qiu1112Nov.github.io/UNFORM/`，以 GitHub 实际显示为准。
+4. 等待 build 和 deploy 成功，从 Pages 设置或部署环境读取真实 HTTPS 地址。目标网址为 `https://qiu1112nov.github.io/UNFORM/`，以 GitHub 实际显示为准。
 5. 用手机与电脑打开地址，主动开启摄像头并验证张掌、握拳及拒绝授权回退。
 
-Vite 使用 `base: './'`，资源支持 `/UNFORM/` 子路径。仓库/组织须允许 Pages 和 Actions；若权限受限可使用 Vercel。
+Vite 使用 `base: '/UNFORM/'`，CSS、JavaScript、favicon 和 MediaPipe WASM 均从该子路径加载。本地开发与预览也使用 `/UNFORM/` 路径。仓库/组织须允许 Pages 和 Actions；若权限受限可使用 Vercel。工作流只保留一个部署入口，通过 `pages: write` 和 `id-token: write` 发布，并用 `github-pages` 并发组避免同时部署。
 
 ## Vercel 部署（HTTPS）
 
 1. 在 Vercel 选择 **Add New → Project**，导入本 GitHub 仓库。
-2. 框架选 Vite，Root Directory 为仓库根目录；安装命令 `npm ci`，Build Command 为 `npm run build`，Output Directory 为 `dist`，Node.js 选 22 或 24。
+2. 框架选 Vite，Root Directory 为仓库根目录；安装命令 `npm ci`，Build Command 为 `npm run build -- --base=/`（覆盖 GitHub Pages 子路径，适配 Vercel 域名根目录），Output Directory 为 `dist`，Node.js 选 22 或 24。
 3. Production Branch 选 `main` 并点击 Deploy。无需应用密钥或环境变量。
 4. 成功后使用 Vercel 显示的真实 HTTPS 地址。开发分支也可生成独立 Preview Deployment。
 5. 若有访问保护，需要在 Vercel 设置中允许目标访客访问，才能作为公开作品集网址。
