@@ -19,19 +19,23 @@ export function fragmentLayer(kind, home) {
 export class FragmentLayers {
   constructor() {
     this.states = Array.from({ length: 3 }, () => ({ value: 0, velocity: 0 }));
-    this.goal = 0; this.direction = 1; this.age = 0;
+    this.targets = [0, 0, 0]; this.goal = 0; this.direction = 1; this.age = 0;
   }
   update(target, dt, inertia = MOTION.motionInertia) {
     if (Math.abs(target - this.goal) > 0.0001) {
       this.direction = target > this.goal ? 1 : -1;
       this.goal = target; this.age = 0;
     }
-    const coefficients = springCoefficients(dt, inertia);
     for (let layer = 0; layer < 3; layer++) {
       const rank = this.direction > 0 ? layer : 2 - layer;
       const state = this.states[layer];
-      const active = this.age + 1e-8 >= rank * FLOW_STATE.fragment.staggerSeconds;
-      advanceSpring(state, active ? this.goal : state.value, coefficients);
+      const waiting = Math.min(dt, Math.max(0, rank * FLOW_STATE.fragment.staggerSeconds - this.age));
+      if (waiting > 0) advanceSpring(state, this.targets[layer], springCoefficients(waiting, inertia));
+      const active = dt - waiting;
+      if (active > 0) {
+        this.targets[layer] = this.goal;
+        advanceSpring(state, this.goal, springCoefficients(active, inertia));
+      }
     }
     this.age += dt;
   }
@@ -67,19 +71,23 @@ export class SpatialTrace {
     this.lastSample = new Float64Array(this.capacity).fill(-Infinity);
     for (let slot = 0; slot < this.capacity; slot++) this.owners[slot] = Math.floor((slot + 0.5) * count / this.capacity);
     this.energy = { value: 0, velocity: 0 };
-    this.handX = 0.5; this.handY = 0.5; this.lastHandAt = null; this.speed = 0; this.tracked = false; this.emitting = false;
+    this.handX = 0.5; this.handY = 0.5; this.lastHandAt = null; this.speed = 0; this.vx = 0; this.vy = 0; this.intervalMs = 60; this.peakSpeed = 0; this.peakAt = -Infinity; this.tracked = false; this.emitting = false;
   }
   hand(hand, now) {
-    if (!hand) { this.tracked = false; this.lastHandAt = null; this.speed = 0; this.emitting = false; return; }
+    if (!hand || hand.tracked === false) { this.tracked = false; this.lastHandAt = null; this.speed = 0; this.vx = 0; this.vy = 0; this.peakSpeed = 0; this.peakAt = -Infinity; this.emitting = false; return; }
     if (this.lastHandAt !== null) {
       const dt = Math.max(8, now - this.lastHandAt) / 1000;
-      this.speed = Math.hypot(hand.x - this.handX, hand.y - this.handY) / dt;
+      this.vx = hand.vx ?? (hand.x - this.handX) / dt; this.vy = hand.vy ?? (hand.y - this.handY) / dt;
+      this.speed = Math.hypot(this.vx, this.vy);
+      this.intervalMs = Math.min(300, dt * 1000);
     } else this.speed = 0;
+    if (this.speed > FLOW_STATE.trace.speedThreshold) { this.peakSpeed = this.speed; this.peakAt = now; }
     this.handX = hand.x; this.handY = hand.y; this.lastHandAt = now; this.tracked = true;
   }
   update(dt, now, inertia = MOTION.motionInertia) {
-    const fresh = this.tracked && now - this.lastHandAt < 120;
-    const target = fresh ? clamp((this.speed - FLOW_STATE.trace.speedThreshold) / FLOW_STATE.trace.speedRange) : 0;
+    const fresh = this.tracked && now - this.lastHandAt < Math.max(120, this.intervalMs * 1.8);
+    const speed = Math.max(this.speed, this.peakSpeed * Math.max(0, 1 - (now - this.peakAt) / 160));
+    const target = fresh ? clamp((speed - FLOW_STATE.trace.speedThreshold) / FLOW_STATE.trace.speedRange) : 0;
     this.emitting = target > 0;
     advanceSpring(this.energy, target, springCoefficients(dt, inertia, 1.6));
   }

@@ -47,7 +47,8 @@ export class ParticleField {
     this.activation = { value: 0, velocity: 0 }; this.impulse = 0;
     this.quickFeedback = { value: 0, velocity: 0 };
     this.pendingGesture = null; this.lastResponseId = null;
-    this.previewTarget = 0;
+    this.previewTarget = 0; this.targetActivation = 0;
+    this.handYaw = { value: 0, velocity: 0 }; this.handPitch = { value: 0, velocity: 0 };
     this.centerMotionX = { value: 0, velocity: 0 }; this.centerMotionY = { value: 0, velocity: 0 };
     this.focus = null; this.hand = null; this.pointers = new Map();
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -172,7 +173,7 @@ export class ParticleField {
 
   animate(now) {
     const interval = this.last ? now - this.last : 1000 / 60;
-    const dt = Math.min(interval / 1000, 0.05);
+    const dt = Math.max(0, Math.min(interval / 1000, 0.25));
     this.last = now;
     if (!this.paused) {
       const started = performance.now();
@@ -183,7 +184,7 @@ export class ParticleField {
       const pending = this.pendingGesture;
       // A rendering proxy excludes idle rotation: it measures gesture-driven
       // deformation, approximately >=0.5 CSS px, after Canvas commands submit.
-      const responseAmount = pending ? Math.max(pending.direction * (this.activation.value - pending.baseline), pending.direction * (this.quickFeedback.value - pending.feedback) * 0.025) : 0;
+      const responseAmount = pending ? Math.max(pending.direction * (this.activation.value - pending.baseline), pending.direction * (this.quickFeedback.value - pending.feedback) * GESTURE_TIMING.previewActivation) : 0;
       if (pending && this.scale * this.dispersion * responseAmount >= 0.5) {
         const renderedAt = performance.now();
         this.onGestureRendered?.({ id: pending.id, animationStartMs: renderedAt - pending.observedAt, renderQueueMs: renderedAt - pending.dispatchedAt });
@@ -199,6 +200,7 @@ export class ParticleField {
   }
 
   update(dt, now = performance.now()) {
+    if (this.hand?.validUntil !== undefined && now > this.hand.validUntil) this.setHand(null);
     this.budget.advance(dt);
     const coefficients = springCoefficients(dt, this.inertia);
     const scatterCoefficients = springCoefficients(dt, this.inertia, 2);
@@ -229,11 +231,17 @@ export class ParticleField {
     const target = this.hand?.feedback ? this.previewTarget : this.hand?.activation ?? spread * spread;
     // Confirmation gates only the staged fragment wave. The independent quick
     // response still renders immediately, without consuming its 80ms staggering.
-    this.fragments.update(this.hand?.feedback ? this.fragments.goal : target, dt, this.inertia);
+    this.targetActivation = this.hand?.targetActivation ?? (this.hand?.feedback ? this.fragments.goal : target);
+    this.fragments.update(this.targetActivation, dt, this.inertia);
     this.trace.update(dt, now, this.inertia);
+    const rotation = springCoefficients(dt, this.inertia, 1.6);
+    const moving = this.trace.emitting ? 1 : 0;
+    advanceSpring(this.handYaw, clamp(this.trace.vx || 0, -3, 3) * 0.05 * moving, rotation);
+    advanceSpring(this.handPitch, clamp(this.trace.vy || 0, -3, 3) * 0.035 * moving, rotation);
     this.impulse = clamp(advanceSpring(this.activation, target, coefficients));
-    // Small, fast additive feedback. It fades into the unchanged 65% inertia
-    // spring on confirmation or cancellation instead of snapping particle positions.
+    // Restore the bounded 3.1.1 preview range that FRAGMENT's confirmation gate
+    // removed. This independent channel fades out on confirmation/cancellation;
+    // it never scales down or freezes the confirmed layer goals.
     advanceSpring(this.quickFeedback, this.hand?.feedback ?? 0, springCoefficients(dt, this.inertia, 4));
     const legacyPointer = this.form !== 'octahedron' && this.focus;
     const hx = this.hand ? (this.hand.x - 0.5) * this.scale * 0.4 : legacyPointer ? clamp((this.focus.x - this.originX) * 0.3, -this.scale * 0.4, this.scale * 0.4) : 0;
@@ -286,7 +294,7 @@ export class ParticleField {
   }
 
   projectAll() {
-    const yaw = this.time * 0.075 + 0.6, pitch = -0.12 + Math.sin(this.time * 0.1) * 0.035;
+    const yaw = this.time * 0.075 + 0.6 + this.handYaw.value, pitch = -0.12 + Math.sin(this.time * 0.1) * 0.035 + this.handPitch.value;
     this.yawCos = Math.cos(yaw); this.yawSin = Math.sin(yaw);
     this.pitchCos = Math.cos(pitch); this.pitchSin = Math.sin(pitch);
     const driftSin = Math.sin(this.time * 0.28), driftCos = Math.cos(this.time * 0.28);
@@ -298,7 +306,7 @@ export class ParticleField {
       const i = this.budget.indices[slot];
       const p = this.points[i];
       const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
-      const amount = (clamp(p.deformation.value + this.quickFeedback.value * 0.025) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
+      const amount = (clamp(p.deformation.value + this.quickFeedback.value * GESTURE_TIMING.previewActivation) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
       for (let axis = 0; axis < 3; axis++) p.world[axis] = p.position[axis] * (1 + amount * 0.45) + (p.driftSin[axis] * driftCos + p.driftCos[axis] * driftSin) * (amount + drift);
       p.traceWeight = 0;

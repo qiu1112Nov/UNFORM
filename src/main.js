@@ -103,11 +103,13 @@ if (field) {
     const ms = value => value === null ? '—' : `${value.toFixed(1)} ms`;
     const timer = setInterval(() => {
       const metrics = camera.metrics.snapshot(performance.now());
+      const diagnostic = camera.diagnostics();
+      const fidelity = `\nGesture: ${camera.response.confirmed === null ? 'unknown' : camera.response.confirmed ? 'open' : 'fist'} / ${camera.response.stage}\nTarget deconstruction: ${(field.targetActivation * field.dispersion * 100).toFixed(1)}%\nActual layers: ${field.fragments.states.map(s => (s.value * field.dispersion * 100).toFixed(1)).join(' / ')}%\nCamera/model/inference: ${diagnostic.camera} / ${diagnostic.model} / ${diagnostic.inference}\nVideo ready/time: ${diagnostic.readyState} / ${Number(diagnostic.mediaTime).toFixed(3)}s\nFacing: requested user / actual ${diagnostic.facingMode}\nHand detected: ${diagnostic.hasHand} / last success: ${diagnostic.lastRecognitionAt === null ? 'never' : ((performance.now() - diagnostic.lastRecognitionAt) / 1000).toFixed(1) + 's ago'}\nError/fallback reason: ${diagnostic.error || 'none'}`;
       const inferenceDetails = `\nInput: ${camera.input?.width ?? 0}×${camera.input?.height ?? 0} / camera ${camera.sourceWidth}×${camera.sourceHeight}\nCapture + bitmap: ${ms(camera.captureMs)}\nFrame → result: ${ms(camera.roundTripMs)}\nPacing interval: ${ms(camera.pump?.intervalMs ?? null)} / in flight: ${camera.pump?.busy ? 1 : 0}`;
       text.textContent = debugMode === 'performance'
         ? `FPS: ${(field.paused ? 0 : field.quality.fps).toFixed(1)}\nParticles: ${field.budget.length} visible / ${field.count} target / ${field.poolCount} pooled\nUpdate: ${ms(field.quality.updateMs)}\nDraw submission: ${ms(field.quality.drawMs)}\nMain work EMA: ${ms(field.quality.workEMA)}\nDPR: ${field.dpr.toFixed(2)} / quality: ${field.mobile ? field.quality.level : 'desktop'}\nTRACE samples: ${field.trace.samples}\nInference: ${ms(metrics.inferenceMs)} / ${camera.inferenceMode}\nCamera: ${metrics.cameraFPS.toFixed(1)} fps / inference: ${metrics.inferenceFPS.toFixed(1)} fps\n*CPU/Canvas submission; excludes display/compositor cost`
         : `Delivered camera: ${metrics.cameraFPS.toFixed(1)} fps\nInference: ${metrics.inferenceFPS.toFixed(1)} fps / ${ms(metrics.inferenceMs)}\nMode: ${camera.inferenceMode}\nConfirmation: ${ms(metrics.confirmationMs)}\nAnimation start*: ${ms(metrics.animationStartMs)}\nDispatch → draw*: ${ms(metrics.renderQueueMs)}\nState: ${metrics.stage}${field.paused ? ' / paused' : ''}\n*Canvas proxy; not physical capture-to-display latency`;
-      text.textContent += inferenceDetails;
+      text.textContent += inferenceDetails + fidelity;
     }, 250);
     window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
   }

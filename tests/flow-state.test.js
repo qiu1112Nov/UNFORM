@@ -79,7 +79,7 @@ test('trace storage is bounded typed arrays with lower mobile budgets and 450ms 
   mobile.clear(); assert.ok(mobile.times.every(t => t === -Infinity));
 });
 
-test('TRACE requires fresh fast hand movement and stops emitting immediately when still', () => {
+test('TRACE briefly holds fast movement energy then expires while still', () => {
   const trace = new SpatialTrace(850, true);
   trace.hand({ x: 0.4, y: 0.5 }, 0); trace.update(1 / 60, 0);
   assert.equal(trace.energy.value, 0);
@@ -87,7 +87,8 @@ test('TRACE requires fresh fast hand movement and stops emitting immediately whe
   for (let i = 0; i < 6; i++) trace.update(1 / 60, 50 + i * 16);
   assert.ok(trace.energy.value > 0.1 && trace.emitting);
   trace.hand({ x: 0.65, y: 0.5 }, 150); trace.update(1 / 60, 150);
-  assert.equal(trace.emitting, false);
+  assert.equal(trace.emitting, true, 'a brief kinetic event survives the next sample');
+  trace.update(1 / 60, 310); assert.equal(trace.emitting, false);
   for (let i = 0; i < 90; i++) trace.update(1 / 60, 150 + i * 16);
   assert.ok(Math.abs(trace.energy.value) < 0.001);
 });
