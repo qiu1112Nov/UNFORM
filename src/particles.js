@@ -1,4 +1,5 @@
 import { clamp, formPoint } from './geometry.js';
+import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 
 export class ParticleField {
   constructor(canvas) {
@@ -7,16 +8,23 @@ export class ParticleField {
     if (!this.ctx) throw new Error('Canvas 2D is unavailable.');
     this.mobile = matchMedia('(max-width: 800px)').matches || (navigator.hardwareConcurrency || 4) <= 4;
     this.count = this.mobile ? 850 : 1900;
-    this.points = Array.from({ length: this.count }, (_, i) => ({
-      position: [0, 0, 0], target: formPoint('circle', i, this.count),
-      seed: ((i * 16807) % 2147483647) / 2147483647 * 90,
-      angle: i * 2.399963, radius: 0.55 + ((i * 7919) % 997) / 997 * 0.8,
-    }));
-    this.form = 'circle'; this.dispersion = 0.18; this.impulse = 0;
+    this.mesh = buildSurfaceMesh(this.mobile ? 6 : 8);
+    this.weave = new WeaveNetwork(this.mesh);
+    this.points = Array.from({ length: this.count }, (_, i) => {
+      const sample = octahedronParticle(i, this.count);
+      return {
+        kind: sample.kind, home: sample.point, position: [...sample.point], target: [...sample.point],
+        thread: sample.kind === 'interior' ? null : nearestThread(sample.point, this.mesh),
+        seed: i * 2.399963, radius: 0.5 + ((i * 7919) % 997) / 997 * 0.7,
+        scatter: 0, x: 0, y: 0, depth: 0,
+      };
+    });
+    this.form = 'octahedron'; this.dispersion = 0.06; this.impulse = 0;
     this.focus = null; this.hand = null; this.pointers = new Map();
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.reducedMotion = this.paused;
-    this.frame = 0; this.last = 0; this.centerX = 0; this.centerY = 0;
+    this.frame = 0; this.last = 0;
+    this.nodeScreens = this.mesh.nodes.map(() => ({ x: 0, y: 0, depth: 0 }));
     this.resize = this.resize.bind(this);
     window.addEventListener('resize', this.resize);
     this.resize();
@@ -24,7 +32,8 @@ export class ParticleField {
     this.frame = requestAnimationFrame(this.animate);
     document.addEventListener('visibilitychange', () => {
       cancelAnimationFrame(this.frame);
-      if (!document.hidden) { this.last = 0; this.frame = requestAnimationFrame(this.animate); }
+      if (document.hidden) this.clearPointers();
+      else { this.last = 0; this.frame = requestAnimationFrame(this.animate); }
     });
   }
 
@@ -34,22 +43,84 @@ export class ParticleField {
     this.canvas.width = Math.round(this.width * this.dpr);
     this.canvas.height = Math.round(this.height * this.dpr);
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-    this.compact = this.width <= 800;
-    this.originX = this.width * (this.compact ? 0.51 : 0.67);
-    this.originY = this.height * (this.compact ? 0.55 : 0.47);
-    this.scale = this.compact ? Math.min(this.width * 0.36, this.height * 0.19) : Math.min(this.width * 0.23, this.height * 0.31);
-    if (!this.centerX) { this.centerX = this.originX; this.centerY = this.originY; }
-    this.draw();
+    // Read the actual layout, reserving separate title, sculpture and control bands.
+    const intro = document.querySelector('.intro')?.getBoundingClientRect();
+    const status = document.querySelector('.status-line')?.getBoundingClientRect();
+    this.artTop = (intro?.bottom ?? this.height * 0.2) + 12;
+    this.artBottom = Math.max(this.artTop + 32, (status?.top ?? this.height * 0.8) - 12);
+    this.originX = this.width / 2;
+    this.originY = (this.artTop + this.artBottom) / 2;
+    this.scale = Math.max(12, Math.min(this.width * 0.37, (this.artBottom - this.artTop) * 0.43));
+    this.centerX = this.originX; this.centerY = this.originY;
+    this.projectAll(); this.draw();
   }
 
   setForm(form) {
-    this.form = form;
-    this.points.forEach((p, i) => { p.target = formPoint(form, i, this.count); });
+    this.form = form; this.clearPointers(); this.weave.clear();
+    this.points.forEach((p, i) => { p.target = form === 'octahedron' ? p.home : formPoint(form, i, this.count); });
   }
 
   reset() {
-    this.focus = null; this.hand = null; this.pointers.clear(); this.impulse = 0;
-    this.dispersion = 0.18; this.setForm('circle');
+    this.focus = null; this.hand = null; this.impulse = 0;
+    this.dispersion = 0.06; this.points.forEach(p => { p.scatter = 0; });
+    this.setForm('octahedron');
+  }
+
+  nearestNode(point) {
+    let index = -1, distance = Math.max(34, this.scale * 0.3);
+    this.nodeScreens.forEach((node, i) => {
+      const d = Math.hypot(node.x - point.x, node.y - point.y);
+      if (d < distance) { index = i; distance = d; }
+    });
+    return index;
+  }
+
+  pointerDown(id, x, y, now) {
+    const point = { x, y, time: now, quiet: 0, tearing: false };
+    this.pointers.set(id, point); this.focus = point;
+    if (this.form === 'octahedron') {
+      const node = this.nearestNode(point);
+      if (node >= 0) this.weave.begin(id, node);
+    }
+  }
+
+  pointerMove(id, x, y, now) {
+    const previous = this.pointers.get(id);
+    this.focus = { x, y };
+    if (!previous) return;
+    const point = { x, y };
+    const distance = Math.hypot(x - previous.x, y - previous.y);
+    // A stationary hold can last seconds before the first move. Exclude dwell
+    // time so that the first fast swipe after a long press still tears threads.
+    const speed = distance / Math.max(8, Math.min(50, now - previous.time)) * 1000;
+    if (this.form === 'octahedron' && distance > 3 && speed > Math.max(330, this.scale * 3)) {
+      this.tear(previous, point);
+      this.weave.cancel(id); previous.tearing = true; previous.quiet = 0;
+    }
+    previous.x = x; previous.y = y; previous.time = now;
+  }
+
+  pointerUp(id, cancelled = false) {
+    if (cancelled) this.weave.cancel(id); else this.weave.release(id);
+    this.pointers.delete(id);
+    this.focus = this.pointers.size ? [...this.pointers.values()][0] : null;
+  }
+
+  clearPointers() {
+    this.pointers.clear(); this.weave.sources.clear(); this.focus = null;
+  }
+
+  tear(a, b) {
+    const radius = Math.max(24, this.scale * 0.24);
+    const damaged = [];
+    this.nodeScreens.forEach((node, i) => {
+      if (segmentDistance(node.x, node.y, a, b) < radius) damaged.push(i);
+    });
+    this.weave.breakNodes(damaged);
+    for (const p of this.points) {
+      const weight = clamp(1 - segmentDistance(p.x, p.y, a, b) / (radius * 1.4));
+      p.scatter = Math.max(p.scatter, weight * 0.7);
+    }
   }
 
   animate(now) {
@@ -60,69 +131,113 @@ export class ParticleField {
   }
 
   update(dt) {
-    const follow = 1 - Math.exp(-dt * 4.5);
-    const hand = this.hand;
-    let targetX = this.originX, targetY = this.originY;
-    if (hand) {
-      targetX = this.width * (0.15 + hand.x * 0.7);
-      targetY = this.height * (0.2 + hand.y * 0.5);
-    } else if (this.focus) {
-      targetX += (this.focus.x - this.originX) * 0.38;
-      targetY += (this.focus.y - this.originY) * 0.38;
+    const follow = 1 - Math.exp(-dt * 5);
+    for (const [id, point] of this.pointers) {
+      point.quiet += dt;
+      if (point.tearing && point.quiet > 0.4) {
+        point.tearing = false;
+        const node = this.nearestNode(point);
+        if (node >= 0) this.weave.begin(id, node);
+      }
     }
-    this.centerX += (targetX - this.centerX) * follow;
-    this.centerY += (targetY - this.centerY) * follow;
+    this.weave.update(dt);
     let spread = this.dispersion;
-    if (hand) spread = hand.openness;
+    if (this.hand) spread = this.hand.openness;
     else if (this.pointers.size > 1) {
       const [a, b] = [...this.pointers.values()];
       spread = clamp(Math.hypot(a.x - b.x, a.y - b.y) / (Math.min(this.width, this.height) * 0.65));
-    } else if (this.pointers.size) spread = Math.max(spread, 0.82);
-    this.impulse += (spread - this.impulse) * follow;
-    const t = this.time;
+    } else if (this.pointers.size && this.form !== 'octahedron') spread = Math.max(spread, 0.82);
+    // Quadratic response preserves a crisp silhouette at low dispersion.
+    this.impulse += (spread * spread - this.impulse) * follow;
+    const legacyPointer = this.form !== 'octahedron' && this.focus;
+    const hx = this.hand ? (this.hand.x - 0.5) * this.scale * 0.4 : legacyPointer ? clamp((this.focus.x - this.originX) * 0.3, -this.scale * 0.4, this.scale * 0.4) : 0;
+    const hy = this.hand ? (this.hand.y - 0.5) * this.scale * 0.25 : legacyPointer ? clamp((this.focus.y - this.originY) * 0.3, -this.scale * 0.25, this.scale * 0.25) : 0;
+    this.centerX += (this.originX + hx - this.centerX) * follow;
+    this.centerY += (this.originY + hy - this.centerY) * follow;
     for (const p of this.points) {
-      for (let axis = 0; axis < 3; axis++) p.position[axis] += (p.target[axis] - p.position[axis]) * follow;
-      const [x, y, z] = p.position;
-      const rotate = this.form === 'circle' ? t * 0.12 : Math.sin(t * 0.13) * 0.12;
-      const rx = x * Math.cos(rotate) + z * Math.sin(rotate);
-      const rz = -x * Math.sin(rotate) + z * Math.cos(rotate);
-      const a = p.angle + t * 0.045;
-      const burst = this.impulse * p.radius;
-      let sx = rx * (1 + this.impulse * 0.5) + Math.cos(a) * burst;
-      let sy = y * (1 + this.impulse * 0.5) + Math.sin(a) * burst;
-      sx += Math.sin(t * 0.5 + p.seed) * (0.012 + this.impulse * 0.08);
-      sy += Math.cos(t * 0.4 + p.seed) * (0.012 + this.impulse * 0.08);
-      const tilt = -0.23;
-      const px = (sx * Math.cos(tilt) - sy * Math.sin(tilt)) * this.scale + this.centerX;
-      const py = (sx * Math.sin(tilt) + sy * Math.cos(tilt)) * this.scale + this.centerY;
-      p.x = px; p.y = py; p.depth = rz;
+      const thread = this.form === 'octahedron' && p.thread;
+      const pull = thread ? this.weave.strength(thread.link) * 0.92 : 0;
+      for (let axis = 0; axis < 3; axis++) {
+        const target = p.target[axis] + (thread ? (thread.point[axis] - p.target[axis]) * pull : 0);
+        p.position[axis] += (target - p.position[axis]) * follow;
+      }
+      p.scatter *= Math.exp(-dt * 1.8);
     }
+    this.projectAll();
+  }
+
+  project(point, destination) {
+    const yaw = this.time * 0.075 + 0.6, pitch = -0.12 + Math.sin(this.time * 0.1) * 0.035;
+    const x = point[0] * Math.cos(yaw) + point[2] * Math.sin(yaw);
+    const z = -point[0] * Math.sin(yaw) + point[2] * Math.cos(yaw);
+    const y = point[1] * Math.cos(pitch) - z * Math.sin(pitch);
+    const depth = point[1] * Math.sin(pitch) + z * Math.cos(pitch);
+    const perspective = 4.5 / (4.5 - depth);
+    destination.x = this.centerX + x * this.scale * perspective;
+    destination.y = this.centerY - y * this.scale * perspective;
+    destination.depth = depth;
+  }
+
+  projectAll() {
+    for (const p of this.points) {
+      const amount = this.impulse * p.radius + p.scatter;
+      const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
+      const position = p.position.map((v, axis) => v * (1 + amount * 0.45) + Math.sin(p.seed + axis * 2.1 + this.time * 0.28) * (amount + drift));
+      this.project(position, p);
+    }
+    this.mesh.nodes.forEach((point, i) => this.project(point, this.nodeScreens[i]));
+  }
+
+  drawWeave() {
+    const ctx = this.ctx;
+    const coherence = clamp(1 - this.impulse * 2);
+    // Faces are only local, sparse and almost transparent after all corners settle.
+    let filled = 0;
+    for (let i = 0; i < this.mesh.triangles.length && filled < 14; i += 5) {
+      const indices = this.mesh.triangles[i];
+      const strength = Math.min(...indices.map(index => this.weave.charge[index] * (1 - this.weave.damage[index])));
+      if (strength < 0.88) continue;
+      const [a, b, c] = indices.map(index => this.nodeScreens[index]);
+      ctx.fillStyle = `rgba(255,255,255,${(strength - 0.88) * 0.22 * coherence})`;
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.closePath(); ctx.fill(); filled++;
+    }
+    for (let i = 0; i < this.mesh.links.length; i++) {
+      const [ia, ib] = this.mesh.links[i];
+      const a = this.nodeScreens[ia], b = this.nodeScreens[ib];
+      const strength = this.weave.strength(i);
+      const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
+      const base = this.mesh.boundary[i] ? 0.12 * intact : 0;
+      if (strength < 0.025 && base < 0.005) continue;
+      ctx.strokeStyle = `rgba(255,255,255,${(base + strength * 0.43) * coherence})`;
+      ctx.lineWidth = 0.55;
+      ctx.setLineDash(strength < 0.7 && strength > 0.025 ? [1.5 + strength * 3, 4 * (1 - strength)] : []);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+    }
+    ctx.setLineDash([]);
   }
 
   draw() {
     const ctx = this.ctx;
     ctx.fillStyle = '#101111'; ctx.fillRect(0, 0, this.width, this.height);
-    // Quiet drafting marks give the field a measured, editorial frame.
-    ctx.strokeStyle = '#ffffff07'; ctx.lineWidth = 1;
-    const cx = this.originX, cy = this.originY, r = this.scale * 1.25;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
-    ctx.setLineDash([2, 8]); ctx.beginPath();
-    ctx.moveTo(cx - r - 25, cy); ctx.lineTo(cx + r + 25, cy);
-    ctx.moveTo(cx, cy - r - 25); ctx.lineTo(cx, cy + r + 25); ctx.stroke(); ctx.setLineDash([]);
-    if (!this.points[0].x) this.update(1);
-    // One path per opacity group avoids thousands of state changes per frame.
+    ctx.save(); ctx.beginPath(); ctx.rect(12, this.artTop, this.width - 24, this.artBottom - this.artTop); ctx.clip();
+    if (this.form === 'octahedron') this.drawWeave();
+    // Batch tiny light points; a few shards provide scale without heavy glow.
     for (let group = 0; group < 3; group++) {
-      ctx.fillStyle = ['#777b7266', '#bfc3b4aa', '#eeede7'][group];
-      ctx.beginPath();
+      ctx.fillStyle = ['#ffffff45', '#ffffff8c', '#ffffffe0'][group]; ctx.beginPath();
       for (let i = group; i < this.count; i += 3) {
         const p = this.points[i];
-        const radius = (this.mobile ? 0.8 : 0.85) + (p.depth + 1) * 0.32;
-        ctx.moveTo(p.x + radius, p.y); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
+        const radius = (p.kind === 'interior' ? 0.45 : 0.65) + (p.depth + 1) * 0.22;
+        if (i % 23 === 0) {
+          const r = radius * 1.8;
+          ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r * 0.55, p.y); ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r * 0.55, p.y); ctx.closePath();
+        } else if (i % 31 === 0) {
+          ctx.moveTo(p.x, p.y - radius * 1.5); ctx.lineTo(p.x + radius, p.y + radius); ctx.lineTo(p.x - radius, p.y + radius); ctx.closePath();
+        } else { ctx.moveTo(p.x + radius, p.y); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); }
       }
       ctx.fill();
     }
     if (this.form === 'lines' || this.form === 'grid') {
-      ctx.strokeStyle = '#eeede710'; ctx.lineWidth = 0.5; ctx.beginPath();
+      ctx.strokeStyle = '#ffffff1a'; ctx.lineWidth = 0.5; ctx.beginPath();
       const step = this.form === 'lines' ? 9 : 1;
       for (let i = 0; i < this.count - step; i += 2) {
         const a = this.points[i], b = this.points[i + step];
@@ -130,5 +245,6 @@ export class ParticleField {
       }
       ctx.stroke();
     }
+    ctx.restore();
   }
 }
