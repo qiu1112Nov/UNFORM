@@ -1,4 +1,5 @@
 import { clamp, formPoint } from './geometry.js';
+import { advanceSpring, MOTION, recoveryRate, retained, springCoefficients } from './motion.js';
 import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 
 export class ParticleField {
@@ -14,12 +15,18 @@ export class ParticleField {
       const sample = octahedronParticle(i, this.count);
       return {
         kind: sample.kind, home: sample.point, position: [...sample.point], target: [...sample.point],
+        motion: sample.point.map(value => ({ value, velocity: 0 })),
+        deformation: { value: 0, velocity: 0 },
+        scatterMotion: { value: 0, velocity: 0 },
         thread: sample.kind === 'interior' ? null : nearestThread(sample.point, this.mesh),
         seed: i * 2.399963, radius: 0.5 + ((i * 7919) % 997) / 997 * 0.7,
         scatter: 0, x: 0, y: 0, depth: 0,
       };
     });
-    this.form = 'octahedron'; this.dispersion = 0.06; this.impulse = 0;
+    this.form = 'octahedron'; this.dispersion = MOTION.deconstructionStrength;
+    this.inertia = MOTION.motionInertia;
+    this.activation = { value: 0, velocity: 0 }; this.impulse = 0;
+    this.centerMotionX = { value: 0, velocity: 0 }; this.centerMotionY = { value: 0, velocity: 0 };
     this.focus = null; this.hand = null; this.pointers = new Map();
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.reducedMotion = this.paused;
@@ -52,6 +59,8 @@ export class ParticleField {
     this.originY = (this.artTop + this.artBottom) / 2;
     this.scale = Math.max(12, Math.min(this.width * 0.37, (this.artBottom - this.artTop) * 0.43));
     this.centerX = this.originX; this.centerY = this.originY;
+    this.centerMotionX = { value: this.centerX, velocity: 0 };
+    this.centerMotionY = { value: this.centerY, velocity: 0 };
     this.projectAll(); this.draw();
   }
 
@@ -61,8 +70,8 @@ export class ParticleField {
   }
 
   reset() {
-    this.focus = null; this.hand = null; this.impulse = 0;
-    this.dispersion = 0.06; this.points.forEach(p => { p.scatter = 0; });
+    this.focus = null; this.hand = null;
+    this.dispersion = MOTION.deconstructionStrength; this.inertia = MOTION.motionInertia;
     this.setForm('octahedron');
   }
 
@@ -111,12 +120,12 @@ export class ParticleField {
   }
 
   tear(a, b) {
-    const radius = Math.max(24, this.scale * 0.24);
+    const radius = Math.max(24, this.scale * 0.24) * (0.65 + this.dispersion * 0.7);
     const damaged = [];
     this.nodeScreens.forEach((node, i) => {
       if (segmentDistance(node.x, node.y, a, b) < radius) damaged.push(i);
     });
-    this.weave.breakNodes(damaged);
+    this.weave.breakNodes(damaged, this.dispersion);
     for (const p of this.points) {
       const weight = clamp(1 - segmentDistance(p.x, p.y, a, b) / (radius * 1.4));
       p.scatter = Math.max(p.scatter, weight * 0.7);
@@ -131,7 +140,13 @@ export class ParticleField {
   }
 
   update(dt) {
-    const follow = 1 - Math.exp(-dt * 5);
+    const coefficients = springCoefficients(dt, this.inertia);
+    const scatterCoefficients = springCoefficients(dt, this.inertia, 2);
+    const layers = {
+      edge: springCoefficients(dt, this.inertia, 1.3),
+      surface: coefficients,
+      interior: springCoefficients(dt, this.inertia, 0.72),
+    };
     for (const [id, point] of this.pointers) {
       point.quiet += dt;
       if (point.tearing && point.quiet > 0.4) {
@@ -140,28 +155,32 @@ export class ParticleField {
         if (node >= 0) this.weave.begin(id, node);
       }
     }
-    this.weave.update(dt);
-    let spread = this.dispersion;
+    this.weave.update(dt, recoveryRate(this.inertia));
+    let spread = 0;
     if (this.hand) spread = this.hand.openness;
     else if (this.pointers.size > 1) {
       const [a, b] = [...this.pointers.values()];
       spread = clamp(Math.hypot(a.x - b.x, a.y - b.y) / (Math.min(this.width, this.height) * 0.65));
     } else if (this.pointers.size && this.form !== 'octahedron') spread = Math.max(spread, 0.82);
-    // Quadratic response preserves a crisp silhouette at low dispersion.
-    this.impulse += (spread * spread - this.impulse) * follow;
+    // Strength is the effect amplitude; activation comes from hands or touch.
+    // No queued timelines: a new gesture changes the live spring target now.
+    this.impulse = clamp(advanceSpring(this.activation, spread * spread, coefficients));
     const legacyPointer = this.form !== 'octahedron' && this.focus;
     const hx = this.hand ? (this.hand.x - 0.5) * this.scale * 0.4 : legacyPointer ? clamp((this.focus.x - this.originX) * 0.3, -this.scale * 0.4, this.scale * 0.4) : 0;
     const hy = this.hand ? (this.hand.y - 0.5) * this.scale * 0.25 : legacyPointer ? clamp((this.focus.y - this.originY) * 0.3, -this.scale * 0.25, this.scale * 0.25) : 0;
-    this.centerX += (this.originX + hx - this.centerX) * follow;
-    this.centerY += (this.originY + hy - this.centerY) * follow;
+    this.centerX = advanceSpring(this.centerMotionX, this.originX + hx, coefficients);
+    this.centerY = advanceSpring(this.centerMotionY, this.originY + hy, coefficients);
     for (const p of this.points) {
+      const layer = layers[p.kind];
+      advanceSpring(p.deformation, spread * spread, layer);
       const thread = this.form === 'octahedron' && p.thread;
       const pull = thread ? this.weave.strength(thread.link) * 0.92 : 0;
       for (let axis = 0; axis < 3; axis++) {
         const target = p.target[axis] + (thread ? (thread.point[axis] - p.target[axis]) * pull : 0);
-        p.position[axis] += (target - p.position[axis]) * follow;
+        p.position[axis] = advanceSpring(p.motion[axis], target, layer);
       }
-      p.scatter *= Math.exp(-dt * 1.8);
+      p.scatter *= Math.exp(-dt * recoveryRate(this.inertia));
+      advanceSpring(p.scatterMotion, p.scatter, scatterCoefficients);
     }
     this.projectAll();
   }
@@ -179,8 +198,10 @@ export class ParticleField {
   }
 
   projectAll() {
-    for (const p of this.points) {
-      const amount = this.impulse * p.radius + p.scatter;
+    for (let i = 0; i < this.points.length; i++) {
+      const p = this.points[i];
+      const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
+      const amount = (clamp(p.deformation.value) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
       const position = p.position.map((v, axis) => v * (1 + amount * 0.45) + Math.sin(p.seed + axis * 2.1 + this.time * 0.28) * (amount + drift));
       this.project(position, p);
@@ -190,7 +211,7 @@ export class ParticleField {
 
   drawWeave() {
     const ctx = this.ctx;
-    const coherence = clamp(1 - this.impulse * 2);
+    const coherence = 1 - this.impulse * this.dispersion;
     // Faces are only local, sparse and almost transparent after all corners settle.
     let filled = 0;
     for (let i = 0; i < this.mesh.triangles.length && filled < 14; i += 5) {
@@ -205,13 +226,14 @@ export class ParticleField {
       const [ia, ib] = this.mesh.links[i];
       const a = this.nodeScreens[ia], b = this.nodeScreens[ib];
       const strength = this.weave.strength(i);
+      const integrity = 1 - this.impulse * (retained(i, this.dispersion) ? 0.12 : 1);
       const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
       const base = this.mesh.boundary[i] ? 0.12 * intact : 0;
-      if (strength < 0.025 && base < 0.005) continue;
-      ctx.strokeStyle = `rgba(255,255,255,${(base + strength * 0.43) * coherence})`;
+      if ((strength < 0.025 && base < 0.005) || integrity < 0.025) continue;
+      ctx.strokeStyle = `rgba(255,255,255,${(base + strength * 0.43) * integrity})`;
       ctx.lineWidth = 0.55;
-      ctx.setLineDash(strength < 0.7 && strength > 0.025 ? [1.5 + strength * 3, 4 * (1 - strength)] : []);
-      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      ctx.setLineDash(integrity < 0.7 ? [2, 4] : strength < 0.7 && strength > 0.025 ? [1.5 + strength * 3, 4 * (1 - strength)] : []);
+      ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(a.x + (b.x - a.x) * integrity, a.y + (b.y - a.y) * integrity); ctx.stroke();
     }
     ctx.setLineDash([]);
   }

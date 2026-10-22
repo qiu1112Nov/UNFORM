@@ -1,6 +1,7 @@
 import './style.css';
 import { ParticleField } from './particles.js';
 import { HandCamera } from './camera.js';
+import { MOTION } from './motion.js';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#particle-field');
@@ -11,6 +12,12 @@ catch { status.textContent = 'Canvas 2D is unavailable. Please use a modern brow
 
 if (field) {
   const range = $('#dispersion');
+  const syncParameters = () => {
+    range.value = Math.round(field.dispersion * 100);
+    $('#dispersion-value').value = `${range.value}%`;
+    $('#motion-profile').textContent = `${MOTION.dynamicStyle} / HYBRID · INERTIA ${Math.round(field.inertia * 100)}%`;
+  };
+  syncParameters();
   const pause = $('#pause');
   const inputMode = $('#input-mode');
   const pointerMode = matchMedia('(pointer: coarse)').matches ? 'TOUCH MODE' : 'POINTER MODE';
@@ -41,7 +48,7 @@ if (field) {
   if (field.reducedMotion) status.textContent = 'Reduced motion: artwork paused. Press play to animate.';
   pause.addEventListener('click', () => { field.paused = !field.paused; syncPause(); });
   $('#reset').addEventListener('click', () => {
-    field.reset(); setForm('octahedron'); range.value = 6; $('#dispersion-value').value = '6%';
+    field.reset(); setForm('octahedron'); syncParameters();
     if (field.paused) { field.update(1); field.draw(); }
     status.textContent = 'Hold to weave. Swipe to unravel. Release to reform.';
     field.resize();
