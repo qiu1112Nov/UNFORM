@@ -43,20 +43,22 @@ export function createEdgeFlow(index, count, home) {
   const edge = EDGES[index % EDGES.length];
   const a = VERTICES[edge[0]], b = VERTICES[edge[1]];
   const t = Math.abs(home[b.findIndex(v => v !== 0)]);
-  return { a, b, phase: Math.acos(clamp(1 - 2 * t, -1, 1)), direction: index % 2 ? -1 : 1,
-    speed: FLOW_STATE.flow.cyclesPerSecond * (0.65 + ((index * 613) % 997) / 997 * 0.7), position: new Float32Array(home) };
+  const speed = FLOW_STATE.flow.cyclesPerSecond * (0.65 + ((index * 613) % 997) / 997 * 0.7), direction = index % 2 ? -1 : 1;
+  return { a, b, phase: Math.acos(clamp(1 - 2 * t, -1, 1)), direction, speed, angularSpeed: direction * speed * Math.PI * 2,
+    axisA: a.findIndex(v => v !== 0), axisB: b.findIndex(v => v !== 0), position: new Float32Array(home) };
 }
 
 export function advanceEdgeFlow(flow, time) {
-  const t = (1 - Math.cos(flow.phase + flow.direction * time * flow.speed * Math.PI * 2)) / 2;
-  for (let axis = 0; axis < 3; axis++) flow.position[axis] = flow.a[axis] * (1 - t) + flow.b[axis] * t;
+  const t = (1 - Math.cos(flow.phase + time * flow.angularSpeed)) / 2;
+  flow.position[flow.axisA] = flow.a[flow.axisA] * (1 - t);
+  flow.position[flow.axisB] = flow.b[flow.axisB] * t;
 }
 
 export class SpatialTrace {
-  constructor(count, mobile) {
+  constructor(count, mobile, sampleCount) {
     const config = FLOW_STATE.trace;
     this.capacity = Math.max(1, Math.round(count * (mobile ? config.mobileFraction : config.desktopFraction)));
-    this.samples = mobile ? config.mobileSamples : config.desktopSamples;
+    this.samples = sampleCount ?? (mobile ? config.mobileSamples : config.desktopSamples);
     this.owners = new Uint16Array(this.capacity);
     this.positions = new Float32Array(this.capacity * this.samples * 3);
     this.times = new Float64Array(this.capacity * this.samples).fill(-Infinity);
