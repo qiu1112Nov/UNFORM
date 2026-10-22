@@ -30,9 +30,11 @@ export class HandWorkerClient {
     });
   }
   async detect(video, timestamp) {
+    const started = performance.now();
     const bitmap = await createImageBitmap(video);
+    const bitmapMs = performance.now() - started;
     if (this.closed) { bitmap.close(); throw new Error('Worker is closed'); }
-    try { return await this.request('frame', { bitmap, timestamp }, [bitmap]); }
+    try { const result = await this.request('frame', { bitmap, timestamp }, [bitmap]); return { ...result, bitmapMs }; }
     catch (error) { bitmap.close(); throw error; }
   }
   close() {

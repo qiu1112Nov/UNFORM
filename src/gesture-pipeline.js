@@ -66,6 +66,7 @@ export class VideoFramePump {
     this.running = false; this.handle = null; this.kind = null;
     this.lastMediaTime = -1; this.lastDetection = -Infinity; this.cost = 0;
     this.busy = false;
+    this.costFactor = 1.5;
   }
   start() { if (!this.running) { this.running = true; this.schedule(); } }
   schedule() {
@@ -82,7 +83,7 @@ export class VideoFramePump {
       this.lastMediaTime = mediaTime;
       const now = this.clock(); this.onFrame(now);
       // Small timestamp jitter must not turn a 30fps camera into 15fps inference.
-      if (!this.busy && now - this.lastDetection + 2 >= Math.max(1000 / GESTURE_TIMING.maxFPS, this.cost * 1.5)) {
+      if (!this.busy && now - this.lastDetection + 2 >= this.intervalMs) {
         this.lastDetection = now;
         const cost = this.process(now);
         if (cost && typeof cost.then === 'function') {
@@ -94,6 +95,7 @@ export class VideoFramePump {
     this.schedule();
   }
   recordCost(cost) { if (Number.isFinite(cost)) this.cost = this.cost ? this.cost * 0.7 + cost * 0.3 : cost; }
+  get intervalMs() { return Math.max(1000 / GESTURE_TIMING.maxFPS, this.cost * this.costFactor); }
   stop() {
     this.running = false;
     if (this.handle !== null) {

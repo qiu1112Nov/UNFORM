@@ -13,6 +13,7 @@ export class AdaptiveQuality {
     this.mobile = mobile; this.level = 2; this.age = 0; this.lastChange = -Infinity;
     this.slowAge = 0; this.fastAge = 0; this.frameEMA = 16.67; this.workEMA = 0;
     this.fps = 0; this.updateMs = 0; this.drawMs = 0; this.inferenceMs = null;
+    this.recognitionPriority = false;
   }
   get count() { return this.mobile ? MOBILE_PERFORMANCE.tiers[this.level] : 1900; }
   observe(intervalMs, updateMs, drawMs, inferenceMs = null) {
@@ -24,7 +25,7 @@ export class AdaptiveQuality {
     this.workEMA += (updateMs + drawMs - this.workEMA) * alpha;
     this.fps = 1000 / this.frameEMA;
     if (!this.mobile || this.age < MOBILE_PERFORMANCE.warmupSeconds) return false;
-    const slow = this.frameEMA > MOBILE_PERFORMANCE.slowFrameMs || this.workEMA > MOBILE_PERFORMANCE.slowWorkMs;
+    const slow = (!this.recognitionPriority && this.frameEMA > MOBILE_PERFORMANCE.slowFrameMs) || this.workEMA > MOBILE_PERFORMANCE.slowWorkMs;
     const fast = this.frameEMA < MOBILE_PERFORMANCE.fastFrameMs && this.workEMA < MOBILE_PERFORMANCE.fastWorkMs;
     this.slowAge = slow ? this.slowAge + dt : 0;
     this.fastAge = fast ? this.fastAge + dt : 0;

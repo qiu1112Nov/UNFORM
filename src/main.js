@@ -76,7 +76,7 @@ if (field) {
 
   const cameraButton = $('#camera-toggle');
   const camera = new HandCamera($('#camera-video'), (state, message) => {
-    if (state !== 'active') field.inferenceMs = null;
+    if (state !== 'active') { field.inferenceMs = null; field.quality.recognitionPriority = false; }
     const enabled = state === 'loading' || state === 'active';
     cameraButton.setAttribute('aria-pressed', enabled);
     $('#camera-label').textContent = state === 'loading' ? 'Cancel camera' : state === 'active' ? 'Disable camera' : 'Enable camera';
@@ -86,11 +86,12 @@ if (field) {
     requestAnimationFrame(field.resize);
   }, hand => {
     field.inferenceMs = camera.metrics.inferenceMs;
+    field.quality.recognitionPriority = field.mobile && camera.active && camera.inputQuality.level > 0;
     // Position filtering and confirmation run once upstream. Do not add an
     // openness EMA here: it delays both the trend and the spring response.
     field.setHand(hand);
     $('#hand-status').textContent = !hand ? 'LOOKING FOR A HAND' : hand.openness > 0.55 ? 'OPEN PALM / DISPERSE' : 'CLOSED HAND / GATHER';
-  });
+  }, { mobile: field.mobile, renderStats: () => field.quality });
   field.onGestureRendered = sample => camera.metrics.rendered(sample);
   const debugMode = new URLSearchParams(location.search).get('debug');
   if (debugMode === 'gestures' || debugMode === 'performance') {
@@ -102,9 +103,11 @@ if (field) {
     const ms = value => value === null ? '—' : `${value.toFixed(1)} ms`;
     const timer = setInterval(() => {
       const metrics = camera.metrics.snapshot(performance.now());
+      const inferenceDetails = `\nInput: ${camera.input?.width ?? 0}×${camera.input?.height ?? 0} / camera ${camera.sourceWidth}×${camera.sourceHeight}\nCapture + bitmap: ${ms(camera.captureMs)}\nFrame → result: ${ms(camera.roundTripMs)}\nPacing interval: ${ms(camera.pump?.intervalMs ?? null)} / in flight: ${camera.pump?.busy ? 1 : 0}`;
       text.textContent = debugMode === 'performance'
         ? `FPS: ${(field.paused ? 0 : field.quality.fps).toFixed(1)}\nParticles: ${field.budget.length} visible / ${field.count} target / ${field.poolCount} pooled\nUpdate: ${ms(field.quality.updateMs)}\nDraw submission: ${ms(field.quality.drawMs)}\nMain work EMA: ${ms(field.quality.workEMA)}\nDPR: ${field.dpr.toFixed(2)} / quality: ${field.mobile ? field.quality.level : 'desktop'}\nTRACE samples: ${field.trace.samples}\nInference: ${ms(metrics.inferenceMs)} / ${camera.inferenceMode}\nCamera: ${metrics.cameraFPS.toFixed(1)} fps / inference: ${metrics.inferenceFPS.toFixed(1)} fps\n*CPU/Canvas submission; excludes display/compositor cost`
         : `Delivered camera: ${metrics.cameraFPS.toFixed(1)} fps\nInference: ${metrics.inferenceFPS.toFixed(1)} fps / ${ms(metrics.inferenceMs)}\nMode: ${camera.inferenceMode}\nConfirmation: ${ms(metrics.confirmationMs)}\nAnimation start*: ${ms(metrics.animationStartMs)}\nDispatch → draw*: ${ms(metrics.renderQueueMs)}\nState: ${metrics.stage}${field.paused ? ' / paused' : ''}\n*Canvas proxy; not physical capture-to-display latency`;
+      text.textContent += inferenceDetails;
     }, 250);
     window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
   }

@@ -31,6 +31,15 @@ test('desktop quality stays unchanged and hidden/background gaps are ignored', (
   quality.observe(5000, 0, 0); assert.equal(quality.age, age);
 });
 
+test('camera pressure first reduces recognition input, but expensive rendering can still reduce visuals', () => {
+  const quality = new AdaptiveQuality(true);
+  quality.recognitionPriority = true;
+  for (let i = 0; i < 250; i++) quality.observe(33, 1, 2, 70);
+  assert.equal(quality.count, 595, 'slow frames alone do not remove sculpture detail while input can adapt');
+  for (let i = 0; i < 150; i++) quality.observe(33, 10, 10, 70);
+  assert.ok(quality.count < 595, 'actual render work still has a visual safety valve');
+});
+
 test('all mobile budgets preserve density, flow fraction and stable pooled identities', () => {
   const points = Array.from({ length: 850 }, (_, i) => {
     const sample = octahedronParticle(i, 850);
