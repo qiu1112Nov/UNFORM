@@ -15,7 +15,7 @@ if (field) {
   const inputMode = $('#input-mode');
   const pointerMode = matchMedia('(pointer: coarse)').matches ? 'TOUCH MODE' : 'POINTER MODE';
   inputMode.textContent = pointerMode;
-  const captions = { circle: 'FIG. 01 / ORBITAL FORM', lines: 'FIG. 02 / WAVE STUDY', grid: 'FIG. 03 / CARTESIAN FIELD' };
+  const captions = { octahedron: '06 VERTICES / 12 EDGES / 08 FACES', circle: 'ORBITAL FORM', lines: 'WAVE STUDY', grid: 'CARTESIAN FIELD' };
   const setForm = form => {
     field.setForm(form);
     document.querySelectorAll('.form-button').forEach(button => {
@@ -41,32 +41,31 @@ if (field) {
   if (field.reducedMotion) status.textContent = 'Reduced motion: artwork paused. Press play to animate.';
   pause.addEventListener('click', () => { field.paused = !field.paused; syncPause(); });
   $('#reset').addEventListener('click', () => {
-    field.reset(); setForm('circle'); range.value = 18; $('#dispersion-value').value = '18%';
+    field.reset(); setForm('octahedron'); range.value = 6; $('#dispersion-value').value = '6%';
     if (field.paused) { field.update(1); field.draw(); }
-    status.textContent = 'Artwork reset. Move to disturb. Release to return.';
+    status.textContent = 'Hold to weave. Swipe to unravel. Release to reform.';
+    field.resize();
   });
   window.addEventListener('keydown', event => {
     if (event.target.closest('button,input,a,textarea,select,[contenteditable]') || event.altKey || event.metaKey || event.ctrlKey) return;
     if (event.code === 'Space') { event.preventDefault(); pause.click(); }
-    if (['1', '2', '3'].includes(event.key)) setForm(['circle', 'lines', 'grid'][Number(event.key) - 1]);
+    if (['1', '2', '3', '4'].includes(event.key)) setForm(['octahedron', 'lines', 'circle', 'grid'][Number(event.key) - 1]);
   });
   canvas.addEventListener('pointerdown', event => {
     canvas.setPointerCapture(event.pointerId);
-    const point = { x: event.clientX, y: event.clientY };
-    field.pointers.set(event.pointerId, point); field.focus = point;
+    field.pointerDown(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   });
   canvas.addEventListener('pointermove', event => {
-    const point = { x: event.clientX, y: event.clientY };
-    if (field.pointers.has(event.pointerId)) field.pointers.set(event.pointerId, point);
-    if (event.pointerType === 'mouse' || field.pointers.has(event.pointerId)) field.focus = point;
+    field.pointerMove(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   });
-  const release = event => {
-    field.pointers.delete(event.pointerId);
-    field.focus = field.pointers.size ? [...field.pointers.values()][0] : null;
-  };
-  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) canvas.addEventListener(name, release);
+  canvas.addEventListener('pointerup', event => field.pointerUp(event.pointerId));
+  for (const name of ['pointercancel', 'lostpointercapture']) canvas.addEventListener(name, event => {
+    if (field.pointers.has(event.pointerId)) field.pointerUp(event.pointerId, true);
+  });
   canvas.addEventListener('pointerleave', () => { if (!field.pointers.size) field.focus = null; });
-  window.addEventListener('blur', () => { field.pointers.clear(); field.focus = null; });
+  window.addEventListener('blur', () => field.clearPointers());
+  // Avoid the native long-press menu interrupting a weave on mobile browsers.
+  canvas.addEventListener('contextmenu', event => event.preventDefault());
 
   const cameraButton = $('#camera-toggle');
   const camera = new HandCamera($('#camera-video'), (state, message) => {
@@ -76,6 +75,7 @@ if (field) {
     $('#camera-monitor').hidden = state !== 'active';
     inputMode.textContent = state === 'active' ? 'HAND TRACKING' : pointerMode;
     status.textContent = message;
+    requestAnimationFrame(field.resize);
   }, hand => {
     // Light smoothing reduces landmark jitter; lost hands immediately release control.
     const previous = field.hand;
@@ -93,4 +93,5 @@ if (field) {
   guideButton.addEventListener('click', () => showGuide(guide.hidden));
   $('#guide-close').addEventListener('click', () => { showGuide(false); guideButton.focus(); });
   window.addEventListener('keydown', event => { if (event.key === 'Escape' && !guide.hidden) { showGuide(false); guideButton.focus(); } });
+  requestAnimationFrame(field.resize);
 }

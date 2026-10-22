@@ -4,34 +4,34 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#101111" />
-    <meta name="description" content="UNFORM — Gesture-Driven Particle Art. An interactive study of form, movement, and the space between." />
-    <title>UNFORM — Gesture-Driven Particle Art</title>
+    <meta name="description" content="UNFORM 3.0 — OCTAHEDRON / 001. A monochrome particle sculpture. Hold to weave, swipe to unravel." />
+    <title>UNFORM 3.0 — OCTAHEDRON / 001</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   </head>
   <body>
-    <canvas id="particle-field" aria-label="Interactive particle artwork. Drag to move the field; use the controls to change its form."></canvas>
+    <canvas id="particle-field" aria-label="Three-dimensional octahedron particle sculpture. Hold to weave local connections, swipe to break them. Alternative forms and motion controls are available below."></canvas>
     <div class="interface">
       <header class="masthead">
         <a class="wordmark" href="./" aria-label="UNFORM home">UNFORM<span class="wordmark-dot">®</span></a>
-        <span class="masthead-caption">AN EXPLORATION OF<br />FORM & HUMAN MOTION</span>
+        <span class="masthead-caption">SCULPTURES IN MOTION<br />VOLUME 03 — STUDY 001</span>
         <button class="camera-button" id="camera-toggle" aria-pressed="false"><span class="camera-icon" aria-hidden="true"></span><span id="camera-label">Enable camera</span><svg class="button-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M5 19 19 5M5 5h14v14"/></svg></button>
       </header>
 
       <main>
         <div class="intro">
-          <div class="eyebrow"><span class="live-dot"></span> INTERACTIVE STUDY — 001</div>
-          <h1>Nothing is<br />set in <span>form.</span></h1>
-          <p>A field of possibilities.<br />Shaped by your presence.</p>
+          <div class="eyebrow"><span class="live-dot"></span> UNFORM 3.0 — PARTICLE SCULPTURE</div>
+          <h1>OCTAHEDRON <span>/ 001</span></h1>
+          <p>A quiet structure. Woven by your touch.</p>
           <button class="text-button" id="guide-toggle" aria-expanded="false" aria-controls="guide"><span class="circle-plus" aria-hidden="true">+</span> HOW TO INTERACT</button>
         </div>
 
-        <div class="field-label" aria-hidden="true"><span class="crosshair">+</span><span id="form-caption">FIG. 01 / ORBITAL FORM</span></div>
+        <div class="field-label" aria-hidden="true"><span class="crosshair">+</span><span id="form-caption">06 VERTICES / 12 EDGES / 08 FACES</span></div>
 
         <aside class="guide" id="guide" hidden>
           <div class="guide-heading"><span>A LITTLE MOVEMENT GOES A LONG WAY.</span><button id="guide-close" aria-label="Close interaction guide">×</button></div>
-          <div><b>01 / TOUCH & MOUSE</b><p>Drag across the artwork to move the field. Hold to disperse; release to reform. Use two fingers to spread or gather.</p></div>
+          <div><b>01 / WEAVE & UNRAVEL</b><p>Touch or hold near the sculpture. Particles gather into dashes, then fine threads travel across its triangular structure. Hold longer to reveal a few translucent facets. Swipe quickly to break nearby threads; particles gently return. Use two fingers to spread or gather.</p></div>
           <div><b>02 / HAND GESTURES</b><p>Enable your camera. An open palm disperses particles, a fist gathers them. Move your hand to guide the field.</p></div>
-          <div><b>03 / MAKE IT YOURS</b><p>Choose a form or adjust the dispersion below. Press Space to pause and 1–3 to switch forms when no control is focused.</p></div>
+          <div><b>03 / MAKE IT YOURS</b><p>Lines, Circle and Grid remain available. Weaving belongs to the octahedron study. Adjust dispersion or pause below. With no control focused, Space pauses and 1–4 switches forms. Press play to weave when motion is paused.</p></div>
           <small>Camera processing stays in your browser. No video is recorded or uploaded. Move away from the controls to interact with the artwork.</small>
         </aside>
 
@@ -40,20 +40,21 @@
           <span id="hand-status">LOOKING FOR A HAND</span>
         </div>
 
-        <div class="status-line" role="status" aria-live="polite" id="status">Move to disturb. Release to return.</div>
+        <div class="status-line" role="status" aria-live="polite" id="status">Hold to weave. Swipe to unravel. Release to reform.</div>
 
         <section class="control-dock" aria-label="Artwork controls">
           <div class="form-controls"><span class="control-label">FORM</span><div class="segmented" role="group" aria-label="Particle form">
-            <button class="form-button active" data-form="circle" aria-pressed="true"><span aria-hidden="true">◯</span> Circle</button>
+            <button class="form-button active" data-form="octahedron" aria-pressed="true"><span aria-hidden="true">◇</span> Octa</button>
             <button class="form-button" data-form="lines" aria-pressed="false"><span aria-hidden="true">≋</span> Lines</button>
+            <button class="form-button" data-form="circle" aria-pressed="false"><span aria-hidden="true">◯</span> Circle</button>
             <button class="form-button" data-form="grid" aria-pressed="false"><span aria-hidden="true">⊞</span> Grid</button>
           </div></div>
-          <div class="dispersion-control"><label class="control-label" for="dispersion">DISPERSION <output id="dispersion-value" for="dispersion">18%</output></label><input type="range" id="dispersion" min="0" max="100" value="18" /></div>
+          <div class="dispersion-control"><label class="control-label" for="dispersion">DISPERSION <output id="dispersion-value" for="dispersion">6%</output></label><input type="range" id="dispersion" min="0" max="100" value="6" /></div>
           <div class="play-controls"><button class="icon-button" id="reset" aria-label="Reset artwork" title="Reset artwork"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 9a8 8 0 1 1 0 7M4 3v6h6"/></svg></button><button class="icon-button" id="pause" aria-label="Pause animation" aria-pressed="false" title="Pause animation"></button></div>
         </section>
       </main>
 
-      <footer><span>GESTURE-DRIVEN PARTICLE ART</span><span class="footer-center"><span class="live-dot"></span><span id="input-mode">POINTER MODE</span></span><span>LESS FORM. MORE FEELING. <span class="footer-cross">+</span></span></footer>
+      <footer><span>OCTAHEDRON / 001</span><span class="footer-center"><span class="live-dot"></span><span id="input-mode">POINTER MODE</span></span><span>LESS FORM. MORE FEELING. <span class="footer-cross">+</span></span></footer>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>
