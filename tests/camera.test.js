@@ -79,7 +79,7 @@ test('Worker and fallback produce identical gesture/continuous outputs from iden
     for (const [time, pose] of [[0, landmarks()], [100, landmarks()], [150, []], [200, landmarks(false, 0.6)], [300, landmarks(false, 0.7)], [500, landmarks(false)]]) {
       env.result({ landmarks: pose }); await env.frame(time);
     }
-    runs.push(env.outputs.map(hand => hand && ({ x: hand.x, activation: hand.activation, target: hand.targetActivation, feedback: hand.feedback, tracked: hand.tracked })));
+    runs.push(env.outputs.map(hand => hand && ({ x: hand.x, activation: hand.activation, target: hand.targetActivation, previewGoal: hand.previewGoal, confirmedPose: hand.confirmedPose, feedback: hand.feedback, tracked: hand.tracked })));
   }
   assert.deepEqual(runs[0], runs[1]);
 });
@@ -120,4 +120,19 @@ test('stopping during a runtime backend switch disposes a late detector and does
   env.camera.stop(); resolve({ close() { closed++; } });
   for (let i = 0; i < 8; i++) await Promise.resolve();
   assert.equal(closed, 1); assert.equal(env.camera.active, false); assert.equal(env.camera.landmarker, null);
+});
+
+test('a delayed old Worker result cannot overwrite a newer camera session gesture', async t => {
+  const env = setup(t); await env.camera.start();
+  env.video.videoWidth = 640; env.video.videoHeight = 480;
+  let resolve;
+  env.camera.workerClient.detect = () => new Promise(done => { resolve = done; });
+  await env.frame(100); env.camera.stop();
+  env.result({ landmarks: landmarks(false) }); await env.camera.start();
+  await env.frame(200); await env.frame(300);
+  assert.equal(env.camera.response.confirmed, 0);
+  const length = env.outputs.length;
+  resolve({ landmarks: landmarks(true), inferenceMs: 10, bitmapMs: 1 });
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(env.outputs.length, length); assert.equal(env.camera.response.confirmed, 0);
 });

@@ -1,5 +1,6 @@
 import { clamp } from './geometry.js';
 import { advanceSpring, MOTION, springCoefficients } from './motion.js';
+import { GESTURE_TIMING } from './gesture-pipeline.js';
 import { EDGES, VERTICES } from './octahedron.js';
 
 export const FLOW_STATE = Object.freeze({
@@ -15,22 +16,38 @@ export function fragmentLayer(kind, home) {
 }
 
 // No timers or queued animations. A reversal replaces the pending wave while
-// each spring keeps its live position and velocity. Preview bypasses this wave.
+// each spring keeps its live position and velocity across preview/confirmation.
 export class FragmentLayers {
   constructor() {
     this.states = Array.from({ length: 3 }, () => ({ value: 0, velocity: 0 }));
-    this.targets = [0, 0, 0]; this.goal = 0; this.direction = 1; this.age = 0;
+    this.previewGoal = null; this.targets = [0, 0, 0]; this.goal = 0; this.direction = 1; this.age = 0;
   }
-  update(target, dt, inertia = MOTION.motionInertia) {
-    if (Math.abs(target - this.goal) > 0.0001) {
-      this.direction = target > this.goal ? 1 : -1;
+  update(target, dt, inertia = MOTION.motionInertia, previewGoal = null) {
+    if (previewGoal !== null) {
+      if (previewGoal !== this.previewGoal) {
+        this.previewGoal = previewGoal;
+        this.states.forEach((state, i) => {
+          this.targets[i] = clamp(state.value + Math.sign(previewGoal - state.value) * GESTURE_TIMING.previewActivation);
+        });
+      }
+      // Preview advances the real layer springs, never a temporary additive pose.
+      this.states.forEach((state, i) => this.advancePreview(state, this.targets[i], dt, inertia));
+      return;
+    }
+    const confirmedFromPreview = this.previewGoal !== null;
+    this.previewGoal = null;
+    if (Math.abs(target - this.goal) > 0.0001 || confirmedFromPreview) {
+      this.direction = target > this.states.reduce((sum, state) => sum + state.value, 0) / 3 ? 1 : -1;
       this.goal = target; this.age = 0;
     }
     for (let layer = 0; layer < 3; layer++) {
       const rank = this.direction > 0 ? layer : 2 - layer;
       const state = this.states[layer];
       const waiting = Math.min(dt, Math.max(0, rank * FLOW_STATE.fragment.staggerSeconds - this.age));
-      if (waiting > 0) advanceSpring(state, this.targets[layer], springCoefficients(waiting, inertia));
+      if (waiting > 0) {
+        // Delayed layers hold/approach their preview target, not their old home.
+        this.advancePreview(state, this.targets[layer], waiting, inertia);
+      }
       const active = dt - waiting;
       if (active > 0) {
         this.targets[layer] = this.goal;
@@ -38,6 +55,13 @@ export class FragmentLayers {
       }
     }
     this.age += dt;
+  }
+  advancePreview(state, target, dt, inertia) {
+    const before = state.value - target;
+    advanceSpring(state, target, springCoefficients(dt, inertia, 4));
+    // Stop at the bounded preview destination, avoiding an overshoot/rebound
+    // while waiting for low-frequency confirmation. Formal springs keep inertia.
+    if ((state.value - target) * before <= 0) { state.value = target; state.velocity = 0; }
   }
 }
 

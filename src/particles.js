@@ -118,7 +118,7 @@ export class ParticleField {
       this.lastResponseId = hand.response.id;
       const direction = Math.sign(hand.feedback || hand.activation - this.activation.value);
       this.previewTarget = clamp(this.activation.value + direction * GESTURE_TIMING.previewActivation);
-      this.pendingGesture = { ...hand.response, direction, dispatchedAt: hand.dispatchedAt, baseline: this.activation.value, feedback: this.quickFeedback.value };
+      this.pendingGesture = { ...hand.response, direction, dispatchedAt: hand.dispatchedAt, baseline: this.activation.value };
     }
   }
 
@@ -184,7 +184,7 @@ export class ParticleField {
       const pending = this.pendingGesture;
       // A rendering proxy excludes idle rotation: it measures gesture-driven
       // deformation, approximately >=0.5 CSS px, after Canvas commands submit.
-      const responseAmount = pending ? Math.max(pending.direction * (this.activation.value - pending.baseline), pending.direction * (this.quickFeedback.value - pending.feedback) * GESTURE_TIMING.previewActivation) : 0;
+      const responseAmount = pending ? Math.max(pending.direction * (this.activation.value - pending.baseline), 0) : 0;
       if (pending && this.scale * this.dispersion * responseAmount >= 0.5) {
         const renderedAt = performance.now();
         this.onGestureRendered?.({ id: pending.id, animationStartMs: renderedAt - pending.observedAt, renderQueueMs: renderedAt - pending.dispatchedAt });
@@ -224,24 +224,23 @@ export class ParticleField {
       const [a, b] = [...this.pointers.values()];
       spread = clamp(Math.hypot(a.x - b.x, a.y - b.y) / (Math.min(this.width, this.height) * 0.65));
     } else if (this.pointers.size && this.form !== 'octahedron') spread = Math.max(spread, 0.82);
-    // Strength is the effect amplitude; activation comes from hands or touch.
-    // No queued timelines: a new gesture changes the live spring target now.
-    // Retarget the preview relative to the live animation, not a previous
-    // confirmed endpoint: a fist can interrupt a still-opening sculpture.
-    const target = this.hand?.feedback ? this.previewTarget : this.hand?.activation ?? spread * spread;
-    // Confirmation gates only the staged fragment wave. The independent quick
-    // response still renders immediately, without consuming its 80ms staggering.
-    this.targetActivation = this.hand?.targetActivation ?? (this.hand?.feedback ? this.fragments.goal : target);
-    this.fragments.update(this.targetActivation, dt, this.inertia);
+    // A single set of layer states owns preview and formal geometry. Missing
+    // samples preserve intent upstream; confirmation never resets these springs.
+    const previewGoal = this.hand?.previewGoal ?? (this.hand?.feedback ? (this.hand.feedback > 0 ? 1 : 0) : null);
+    const target = previewGoal !== null ? this.previewTarget : this.hand?.targetActivation ?? this.hand?.activation ?? spread * spread;
+    this.targetActivation = this.hand?.targetActivation ?? (previewGoal !== null ? this.fragments.goal : target);
+    this.fragments.update(this.targetActivation, dt, this.inertia, previewGoal);
     this.trace.update(dt, now, this.inertia);
     const rotation = springCoefficients(dt, this.inertia, 1.6);
     const moving = this.trace.emitting ? 1 : 0;
     advanceSpring(this.handYaw, clamp(this.trace.vx || 0, -3, 3) * 0.05 * moving, rotation);
     advanceSpring(this.handPitch, clamp(this.trace.vy || 0, -3, 3) * 0.035 * moving, rotation);
-    this.impulse = clamp(advanceSpring(this.activation, target, coefficients));
-    // Restore the bounded 3.1.1 preview range that FRAGMENT's confirmation gate
-    // removed. This independent channel fades out on confirmation/cancellation;
-    // it never scales down or freezes the confirmed layer goals.
+    if (this.form === 'octahedron') {
+      this.activation.value = this.fragments.states.reduce((sum, state) => sum + clamp(state.value), 0) / 3;
+      this.activation.velocity = this.fragments.states.reduce((sum, state) => sum + state.velocity, 0) / 3;
+      this.impulse = clamp(this.activation.value);
+    } else this.impulse = clamp(advanceSpring(this.activation, target, coefficients));
+    // A brightness hint only: it must never add or subtract geometry progress.
     advanceSpring(this.quickFeedback, this.hand?.feedback ?? 0, springCoefficients(dt, this.inertia, 4));
     const legacyPointer = this.form !== 'octahedron' && this.focus;
     const hx = this.hand ? (this.hand.x - 0.5) * this.scale * 0.4 : legacyPointer ? clamp((this.focus.x - this.originX) * 0.3, -this.scale * 0.4, this.scale * 0.4) : 0;
@@ -306,7 +305,7 @@ export class ParticleField {
       const i = this.budget.indices[slot];
       const p = this.points[i];
       const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
-      const amount = (clamp(p.deformation.value + this.quickFeedback.value * GESTURE_TIMING.previewActivation) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
+      const amount = (clamp(p.deformation.value) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
       for (let axis = 0; axis < 3; axis++) p.world[axis] = p.position[axis] * (1 + amount * 0.45) + (p.driftSin[axis] * driftCos + p.driftCos[axis] * driftSin) * (amount + drift);
       p.traceWeight = 0;
