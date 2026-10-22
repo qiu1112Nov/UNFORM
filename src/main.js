@@ -84,11 +84,25 @@ if (field) {
     status.textContent = message;
     requestAnimationFrame(field.resize);
   }, hand => {
-    // Light smoothing reduces landmark jitter; lost hands immediately release control.
-    const previous = field.hand;
-    field.hand = hand && previous ? { x: previous.x * 0.6 + hand.x * 0.4, y: previous.y * 0.6 + hand.y * 0.4, openness: previous.openness * 0.6 + hand.openness * 0.4 } : hand;
+    // Position filtering and confirmation run once upstream. Do not add an
+    // openness EMA here: it delays both the trend and the spring response.
+    field.setHand(hand);
     $('#hand-status').textContent = !hand ? 'LOOKING FOR A HAND' : hand.openness > 0.55 ? 'OPEN PALM / DISPERSE' : 'CLOSED HAND / GATHER';
   });
+  field.onGestureRendered = sample => camera.metrics.rendered(sample);
+  if (new URLSearchParams(location.search).get('debug') === 'gestures') {
+    const panel = document.createElement('details');
+    panel.className = 'gesture-debug'; panel.open = true;
+    const heading = document.createElement('summary'); heading.textContent = 'GESTURE TIMING';
+    const text = document.createElement('pre'); panel.append(heading, text);
+    document.body.append(panel);
+    const ms = value => value === null ? '—' : `${value.toFixed(1)} ms`;
+    const timer = setInterval(() => {
+      const metrics = camera.metrics.snapshot(performance.now());
+      text.textContent = `Delivered camera: ${metrics.cameraFPS.toFixed(1)} fps\nInference: ${metrics.inferenceFPS.toFixed(1)} fps / ${ms(metrics.inferenceMs)}\nConfirmation: ${ms(metrics.confirmationMs)}\nAnimation start*: ${ms(metrics.animationStartMs)}\nDispatch → draw*: ${ms(metrics.renderQueueMs)}\nState: ${metrics.stage}${field.paused ? ' / paused' : ''}\n*Canvas proxy; not physical capture-to-display latency`;
+    }, 250);
+    window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
+  }
   cameraButton.addEventListener('click', () => { if (camera.requested) camera.stop(); else camera.start(); });
   // Release camera hardware when leaving or hiding the page. Resume is explicit.
   window.addEventListener('pagehide', () => camera.stop());

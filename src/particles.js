@@ -1,5 +1,6 @@
 import { clamp, formPoint } from './geometry.js';
 import { advanceSpring, MOTION, recoveryRate, retained, springCoefficients } from './motion.js';
+import { GESTURE_TIMING } from './gesture-pipeline.js';
 import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 
 export class ParticleField {
@@ -26,6 +27,9 @@ export class ParticleField {
     this.form = 'octahedron'; this.dispersion = MOTION.deconstructionStrength;
     this.inertia = MOTION.motionInertia;
     this.activation = { value: 0, velocity: 0 }; this.impulse = 0;
+    this.quickFeedback = { value: 0, velocity: 0 };
+    this.pendingGesture = null; this.lastResponseId = null;
+    this.previewTarget = 0;
     this.centerMotionX = { value: 0, velocity: 0 }; this.centerMotionY = { value: 0, velocity: 0 };
     this.focus = null; this.hand = null; this.pointers = new Map();
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -70,7 +74,7 @@ export class ParticleField {
   }
 
   reset() {
-    this.focus = null; this.hand = null;
+    this.focus = null; this.setHand(null);
     this.dispersion = MOTION.deconstructionStrength; this.inertia = MOTION.motionInertia;
     this.setForm('octahedron');
   }
@@ -82,6 +86,17 @@ export class ParticleField {
       if (d < distance) { index = i; distance = d; }
     });
     return index;
+  }
+
+  setHand(hand) {
+    this.hand = hand;
+    if (!hand) { this.pendingGesture = null; this.lastResponseId = null; return; }
+    if (hand.response && hand.response.id !== this.lastResponseId) {
+      this.lastResponseId = hand.response.id;
+      const direction = Math.sign(hand.feedback || hand.activation - this.activation.value);
+      this.previewTarget = clamp(this.activation.value + direction * GESTURE_TIMING.previewActivation);
+      this.pendingGesture = { ...hand.response, direction, dispatchedAt: hand.dispatchedAt, baseline: this.activation.value, feedback: this.quickFeedback.value };
+    }
   }
 
   pointerDown(id, x, y, now) {
@@ -135,7 +150,18 @@ export class ParticleField {
   animate(now) {
     const dt = this.last ? Math.min((now - this.last) / 1000, 0.05) : 1 / 60;
     this.last = now;
-    if (!this.paused) { this.time += dt; this.update(dt); this.draw(); }
+    if (!this.paused) {
+      this.time += dt; this.update(dt); this.draw();
+      const pending = this.pendingGesture;
+      // A rendering proxy excludes idle rotation: it measures gesture-driven
+      // deformation, approximately >=0.5 CSS px, after Canvas commands submit.
+      const responseAmount = pending ? Math.max(pending.direction * (this.activation.value - pending.baseline), pending.direction * (this.quickFeedback.value - pending.feedback) * 0.025) : 0;
+      if (pending && this.scale * this.dispersion * responseAmount >= 0.5) {
+        const renderedAt = performance.now();
+        this.onGestureRendered?.({ id: pending.id, animationStartMs: renderedAt - pending.observedAt, renderQueueMs: renderedAt - pending.dispatchedAt });
+        this.pendingGesture = null;
+      }
+    }
     this.frame = requestAnimationFrame(this.animate);
   }
 
@@ -164,7 +190,13 @@ export class ParticleField {
     } else if (this.pointers.size && this.form !== 'octahedron') spread = Math.max(spread, 0.82);
     // Strength is the effect amplitude; activation comes from hands or touch.
     // No queued timelines: a new gesture changes the live spring target now.
-    this.impulse = clamp(advanceSpring(this.activation, spread * spread, coefficients));
+    // Retarget the preview relative to the live animation, not a previous
+    // confirmed endpoint: a fist can interrupt a still-opening sculpture.
+    const target = this.hand?.feedback ? this.previewTarget : this.hand?.activation ?? spread * spread;
+    this.impulse = clamp(advanceSpring(this.activation, target, coefficients));
+    // Small, fast additive feedback. It fades into the unchanged 65% inertia
+    // spring on confirmation or cancellation instead of snapping particle positions.
+    advanceSpring(this.quickFeedback, this.hand?.feedback ?? 0, springCoefficients(dt, this.inertia, 4));
     const legacyPointer = this.form !== 'octahedron' && this.focus;
     const hx = this.hand ? (this.hand.x - 0.5) * this.scale * 0.4 : legacyPointer ? clamp((this.focus.x - this.originX) * 0.3, -this.scale * 0.4, this.scale * 0.4) : 0;
     const hy = this.hand ? (this.hand.y - 0.5) * this.scale * 0.25 : legacyPointer ? clamp((this.focus.y - this.originY) * 0.3, -this.scale * 0.25, this.scale * 0.25) : 0;
@@ -172,7 +204,7 @@ export class ParticleField {
     this.centerY = advanceSpring(this.centerMotionY, this.originY + hy, coefficients);
     for (const p of this.points) {
       const layer = layers[p.kind];
-      advanceSpring(p.deformation, spread * spread, layer);
+      advanceSpring(p.deformation, target, layer);
       const thread = this.form === 'octahedron' && p.thread;
       const pull = thread ? this.weave.strength(thread.link) * 0.92 : 0;
       for (let axis = 0; axis < 3; axis++) {
@@ -201,7 +233,7 @@ export class ParticleField {
     for (let i = 0; i < this.points.length; i++) {
       const p = this.points[i];
       const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
-      const amount = (clamp(p.deformation.value) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
+      const amount = (clamp(p.deformation.value + this.quickFeedback.value * 0.025) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
       const position = p.position.map((v, axis) => v * (1 + amount * 0.45) + Math.sin(p.seed + axis * 2.1 + this.time * 0.28) * (amount + drift));
       this.project(position, p);
@@ -245,7 +277,10 @@ export class ParticleField {
     if (this.form === 'octahedron') this.drawWeave();
     // Batch tiny light points; a few shards provide scale without heavy glow.
     for (let group = 0; group < 3; group++) {
-      ctx.fillStyle = ['#ffffff45', '#ffffff8c', '#ffffffe0'][group]; ctx.beginPath();
+      // A tiny light pulse also acknowledges a reversal while retained inertia
+      // still carries the sculpture in the previous direction.
+      const hint = Math.min(1, Math.abs(this.quickFeedback.value)) * 0.08;
+      ctx.fillStyle = `rgba(255,255,255,${[0.27, 0.55, 0.88][group] + hint})`; ctx.beginPath();
       for (let i = group; i < this.count; i += 3) {
         const p = this.points[i];
         const radius = (p.kind === 'interior' ? 0.45 : 0.65) + (p.depth + 1) * 0.22;

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ParticleField } from '../src/particles.js';
+import { GestureResponse } from '../src/gesture-pipeline.js';
 
 function createField(t) {
   // Exercise the real simulation without requiring a GPU or granting camera access.
@@ -78,4 +79,34 @@ test('continuous open palm deconstructs; a fist rebuilds edges, faces, then inte
   field.hand = null;
   for (let i = 0; i < 240; i++) field.update(1 / 60);
   assert.ok(field.points.every(p => Math.abs(p.deformation.value) < 0.001));
+});
+
+test('pre-response reaches particle projection before confirmation without changing inertia', t => {
+  const field = createField(t), controller = new GestureResponse();
+  const before = field.points.map(p => ({ x: p.x, y: p.y }));
+  const hand = controller.update({ x: 0.5, y: 0.5, openness: 1 }, 0);
+  field.setHand({ ...hand, dispatchedAt: 0 });
+  field.update(1 / 60); field.update(1 / 60);
+  assert.equal(controller.confirmed, null);
+  const displacement = Math.max(...field.points.map((p, i) => Math.hypot(p.x - before[i].x, p.y - before[i].y)));
+  assert.ok(displacement > 0.5 && displacement < field.scale * 0.1);
+  const continuous = field.points[400].x;
+  field.setHand({ ...controller.update({ x: 0.5, y: 0.5, openness: 1 }, 80), dispatchedAt: 80 });
+  assert.equal(field.points[400].x, continuous, 'confirming input does not jump particle coordinates');
+  field.update(1 / 60);
+  assert.ok(Math.abs(field.points[400].x - continuous) < field.scale * 0.05);
+  assert.equal(field.dispersion, 0.55); assert.equal(field.inertia, 0.65);
+});
+
+test('reverse pre-response retargets live motion rather than an unreached confirmed endpoint', t => {
+  const field = createField(t), controller = new GestureResponse();
+  const opened = { x: 0.5, y: 0.5, openness: 1 };
+  controller.update(opened, 0);
+  field.setHand({ ...controller.update(opened, 80), dispatchedAt: 80 });
+  field.update(1 / 60);
+  assert.ok(field.activation.value < 0.14, 'formal opening has only just started');
+  const closing = controller.update({ ...opened, openness: 0 }, 90);
+  field.setHand({ ...closing, dispatchedAt: 90 });
+  assert.equal(closing.activation, 0.86, 'controller retains its confirmed endpoint');
+  assert.equal(field.previewTarget, 0, 'renderer starts gathering from its actual current state');
 });

@@ -136,3 +136,6 @@ footer { height: 54px; display: flex; align-items: center; justify-content: spac
   footer { height: 26px; }
 }
 @media(prefers-reduced-motion:reduce) { * { transition: none !important; } }
+.gesture-debug { position: fixed; z-index: 10; left: 12px; bottom: 12px; max-width: calc(100vw - 24px); padding: 10px; background: #101111f5; border: 1px solid #ffffff40; color: #eee; font: 10px/1.5 monospace; }
+.gesture-debug summary { cursor: pointer; }
+.gesture-debug pre { white-space: pre-wrap; margin: 8px 0 0; font: inherit; }
