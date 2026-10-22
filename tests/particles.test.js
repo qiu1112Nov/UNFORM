@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { ParticleField } from '../src/particles.js';
 import { GestureResponse } from '../src/gesture-pipeline.js';
 
-function createField(t) {
+function createField(t, { width = 390, context: providedContext } = {}) {
   // Exercise the real simulation without requiring a GPU or granting camera access.
   const globals = {
-    window: { innerWidth: 390, innerHeight: 844, addEventListener() {} },
+    window: { innerWidth: width, innerHeight: 844, addEventListener() {} },
+    navigator: { hardwareConcurrency: 8 },
     document: { querySelector: selector => ({ getBoundingClientRect: () => selector === '.intro' ? { bottom: 196 } : { top: 620 } }), addEventListener() {} },
-    matchMedia: query => ({ matches: query.includes('max-width') }),
+    matchMedia: query => ({ matches: query.includes('max-width') && width <= 800 }),
     devicePixelRatio: 3,
     requestAnimationFrame: () => 1,
     cancelAnimationFrame() {},
@@ -18,13 +19,15 @@ function createField(t) {
     Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
     t.after(() => { if (previous) Object.defineProperty(globalThis, name, previous); else delete globalThis[name]; });
   }
-  const context = new Proxy({}, { get: () => () => {} });
+  const context = providedContext ?? new Proxy({}, { get: () => () => {} });
   return new ParticleField({ getContext: () => context });
 }
 
+const visiblePoints = field => Array.from(field.budget.indices.subarray(0, field.budget.length), index => field.points[index]);
+
 test('a fast swipe after a stationary hold tears locally and particles recover', t => {
   const field = createField(t);
-  assert.equal(field.count, 850); assert.equal(field.dpr, 1.5);
+  assert.equal(field.count, 595); assert.equal(field.dpr, 1.5);
   assert.equal(field.centerX, 195);
   const start = { ...field.nodeScreens[20] };
   field.pointerDown(1, start.x, start.y, 0);
@@ -55,7 +58,7 @@ test('FLOW STATE deconstructs vertices first and rebuilds the interior before ed
   assert.ok(field.points.every(p => p.deformation.value === 0), 'idle strength does not explode the sculpture');
   field.hand = { x: 0.5, y: 0.5, openness: 1 };
   for (let i = 0; i < 180; i++) field.update(1 / 60);
-  assert.ok(field.points.every(p => p.deformation.value > 0.99));
+  assert.ok(visiblePoints(field).every(p => p.deformation.value > 0.99));
   field.dispersion = 0; field.projectAll();
   const baseline = field.points.map(p => ({ x: p.x, y: p.y }));
   const displacement = () => field.points.reduce((sum, p, i) => sum + Math.hypot(p.x - baseline[i].x, p.y - baseline[i].y), 0);
@@ -64,9 +67,9 @@ test('FLOW STATE deconstructs vertices first and rebuilds the interior before ed
   field.dispersion = 0.85; field.projectAll();
   assert.ok(medium > 0 && displacement() > medium, 'strength actually controls spread and retained geometry');
   field.dispersion = 0.55;
-  const vertex = field.points.find(p => p.layer === 0);
-  const surface = field.points.find(p => p.layer === 1);
-  const interior = field.points.find(p => p.layer === 2);
+  const vertex = visiblePoints(field).find(p => p.layer === 0);
+  const surface = visiblePoints(field).find(p => p.layer === 1);
+  const interior = visiblePoints(field).find(p => p.layer === 2);
   field.hand.openness = 0;
   for (let i = 0; i < 12; i++) field.update(1 / 60);
   assert.ok(interior.deformation.value < surface.deformation.value);
@@ -147,4 +150,40 @@ test('fast hand input creates only budgeted local 3D traces which expire after s
   assert.ok(field.trace.times.every((_, index) => field.trace.opacity(index, field.time) === 0));
   field.setForm('lines');
   assert.ok(field.trace.times.every(time => time === -Infinity));
+});
+
+test('mobile weave batches preserve geometry with at most 12 stroke submissions', t => {
+  let strokes = 0;
+  const context = new Proxy({}, { get: (_, name) => name === 'stroke' ? () => { strokes++; } : () => {} });
+  const field = createField(t, { context });
+  field.weave.charge.fill(1); strokes = 0;
+  field.drawWeave();
+  assert.ok(strokes > 0 && strokes <= 12);
+  assert.equal(field.trace.samples, 4);
+  const oldPool = field.points, oldIndices = field.budget.indices;
+  field.setParticleCount(425); field.update(0.1);
+  assert.ok(field.budget.length > 425);
+  field.update(0.5);
+  assert.equal(field.budget.length, 425);
+  field.setParticleCount(850); field.update(0.5);
+  assert.equal(field.points, oldPool); assert.equal(field.budget.indices, oldIndices);
+  assert.ok(visiblePoints(field).every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+});
+
+test('DPR and backing canvas resize correctly across phone orientations', t => {
+  const field = createField(t);
+  assert.equal(field.canvas.width, 585); assert.equal(field.canvas.height, 1266);
+  window.innerWidth = 844; window.innerHeight = 390;
+  field.resize();
+  assert.equal(field.dpr, 1.5);
+  assert.equal(field.canvas.width, 1266); assert.equal(field.canvas.height, 585);
+});
+
+test('desktop keeps 1900 particles, 12 trace samples and full per-link weave rendering', t => {
+  let strokes = 0;
+  const context = new Proxy({}, { get: (_, name) => name === 'stroke' ? () => { strokes++; } : () => {} });
+  const field = createField(t, { width: 1440, context });
+  assert.equal(field.count, 1900); assert.equal(field.dpr, 2); assert.equal(field.trace.samples, 12);
+  field.weave.charge.fill(1); strokes = 0; field.drawWeave();
+  assert.equal(strokes, field.mesh.links.length);
 });

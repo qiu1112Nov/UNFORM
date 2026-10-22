@@ -80,6 +80,28 @@ test('slow inference adapts duty cycle without parallel or repeated processing',
   pump.stop();
 });
 
+test('asynchronous worker inference has only one pending frame and does not stop camera callbacks', async () => {
+  const fake = fakeVideo(); let now = 0, processed = 0, frames = 0, finish;
+  const pump = new VideoFramePump(fake.video, () => { processed++; return new Promise(resolve => { finish = resolve; }); }, () => frames++, () => now);
+  pump.start();
+  fake.fire(0, 0);
+  for (let i = 1; i < 6; i++) { now = i * 33; fake.fire(now, i / 30); }
+  assert.equal(processed, 1); assert.equal(frames, 6);
+  finish(30); await Promise.resolve(); await Promise.resolve(); await Promise.resolve();
+  now += 33; fake.fire(now, 7 / 30); assert.equal(processed, 2);
+  pump.stop(); finish(30); await Promise.resolve();
+});
+
+test('worker pacing uses measured end-to-end cost without adding the blocking fallback idle budget', () => {
+  const fake = fakeVideo(); let now = 0, processed = 0;
+  const pump = new VideoFramePump(fake.video, () => { processed++; return 40; }, () => {}, () => now);
+  pump.costFactor = 1; pump.start();
+  fake.fire(0, 0); assert.equal(pump.intervalMs, 40);
+  now = 33; fake.fire(now, 1 / 30); assert.equal(processed, 1);
+  now = 66; fake.fire(now, 2 / 30); assert.equal(processed, 2);
+  pump.stop();
+});
+
 test('RAF fallback deduplicates video time and cancels its own callback', t => {
   let callback, cancelled = 0, now = 0, calls = 0;
   const raf = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
