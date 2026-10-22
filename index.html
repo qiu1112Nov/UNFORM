@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#101111" />
-    <meta name="description" content="UNFORM 3.0 — OCTAHEDRON / 001. A monochrome particle sculpture. Hold to weave, swipe to unravel." />
-    <title>UNFORM 3.0 — OCTAHEDRON / 001</title>
+    <meta name="description" content="UNFORM 3.1 — OCTAHEDRON / 001. Hybrid particle motion with 55% deconstruction and 65% inertia. Hold to weave, swipe to unravel." />
+    <title>UNFORM 3.1 — OCTAHEDRON / 001</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   </head>
   <body>
@@ -19,9 +19,9 @@
 
       <main>
         <div class="intro">
-          <div class="eyebrow"><span class="live-dot"></span> UNFORM 3.0 — PARTICLE SCULPTURE</div>
+          <div class="eyebrow"><span class="live-dot"></span> UNFORM 3.1 — PARTICLE SCULPTURE</div>
           <h1>OCTAHEDRON <span>/ 001</span></h1>
-          <p>A quiet structure. Woven by your touch.</p>
+          <p>A quiet structure. Woven by your touch.<br /><small id="motion-profile"></small></p>
           <button class="text-button" id="guide-toggle" aria-expanded="false" aria-controls="guide"><span class="circle-plus" aria-hidden="true">+</span> HOW TO INTERACT</button>
         </div>
 
@@ -31,7 +31,7 @@
           <div class="guide-heading"><span>A LITTLE MOVEMENT GOES A LONG WAY.</span><button id="guide-close" aria-label="Close interaction guide">×</button></div>
           <div><b>01 / WEAVE & UNRAVEL</b><p>Touch or hold near the sculpture. Particles gather into dashes, then fine threads travel across its triangular structure. Hold longer to reveal a few translucent facets. Swipe quickly to break nearby threads; particles gently return. Use two fingers to spread or gather.</p></div>
           <div><b>02 / HAND GESTURES</b><p>Enable your camera. An open palm disperses particles, a fist gathers them. Move your hand to guide the field.</p></div>
-          <div><b>03 / MAKE IT YOURS</b><p>Lines, Circle and Grid remain available. Weaving belongs to the octahedron study. Adjust dispersion or pause below. With no control focused, Space pauses and 1–4 switches forms. Press play to weave when motion is paused.</p></div>
+          <div><b>03 / MAKE IT YOURS</b><p>Hybrid motion preserves geometric anchors while fragments flow. Deconstruction sets the effect strength; an open palm or two fingers activates it. A fist rebuilds edges, surfaces, then the interior. Lines, Circle and Grid remain available. Space pauses and 1–4 switches forms when no control is focused. Press play to weave when paused.</p></div>
           <small>Camera processing stays in your browser. No video is recorded or uploaded. Move away from the controls to interact with the artwork.</small>
         </aside>
 
@@ -49,7 +49,7 @@
             <button class="form-button" data-form="circle" aria-pressed="false"><span aria-hidden="true">◯</span> Circle</button>
             <button class="form-button" data-form="grid" aria-pressed="false"><span aria-hidden="true">⊞</span> Grid</button>
           </div></div>
-          <div class="dispersion-control"><label class="control-label" for="dispersion">DISPERSION <output id="dispersion-value" for="dispersion">6%</output></label><input type="range" id="dispersion" min="0" max="100" value="6" /></div>
+          <div class="dispersion-control"><label class="control-label" for="dispersion">DECONSTRUCTION <output id="dispersion-value" for="dispersion"></output></label><input type="range" id="dispersion" min="0" max="100" /></div>
           <div class="play-controls"><button class="icon-button" id="reset" aria-label="Reset artwork" title="Reset artwork"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 9a8 8 0 1 1 0 7M4 3v6h6"/></svg></button><button class="icon-button" id="pause" aria-label="Pause animation" aria-pressed="false" title="Pause animation"></button></div>
         </section>
       </main>

@@ -115,13 +115,13 @@ export class WeaveNetwork {
   cancel(id) { this.sources.delete(id); }
   clear() { this.charge.fill(0); this.damage.fill(0); this.sources.clear(); }
 
-  update(dt) {
+  update(dt, damageRecovery = 1.8) {
     for (const [id, source] of this.sources) {
       source.age += dt;
       if (source.released && source.age > 0.85) this.sources.delete(id);
     }
     for (let i = 0; i < this.charge.length; i++) {
-      this.damage[i] *= Math.exp(-dt * 1.8);
+      this.damage[i] *= Math.exp(-dt * damageRecovery);
       let target = 0;
       for (const source of this.sources.values()) {
         const arrival = source.age - source.distances[i] / 0.65;
@@ -133,8 +133,11 @@ export class WeaveNetwork {
     }
   }
 
-  breakNodes(indices) {
-    for (const i of indices) { this.charge[i] = 0; this.damage[i] = 1; }
+  breakNodes(indices, amount = 1) {
+    for (const i of indices) {
+      this.charge[i] *= 1 - clamp(amount);
+      this.damage[i] = Math.max(this.damage[i], clamp(amount));
+    }
   }
 
   strength(link) {
