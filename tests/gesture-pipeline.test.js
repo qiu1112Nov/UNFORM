@@ -35,8 +35,9 @@ test('fist immediately pre-responds in reverse; jitter preserves stable confirme
   assert.equal(controller.update({ ...fist, openness: 0.5 }, 150).activation, 1);
   controller.update(fist, 200);
   assert.equal(controller.update(fist, 280).activation, 0);
-  assert.equal(controller.confirmationMs, 80);
-  assert.equal(controller.update(null, 290), null);
+  assert.equal(controller.confirmationMs, 100);
+  assert.equal(controller.update(null, 290).targetActivation, 0);
+  assert.equal(controller.update(null, 640), null);
   assert.equal(controller.candidate, null);
 });
 
@@ -52,7 +53,7 @@ test('invalid, tiny or nonfinite landmark sets cannot trigger a credible trend',
 
 function fakeVideo() {
   let callback, cancelled = 0, requests = 0;
-  const video = { readyState: 2, currentTime: 0,
+  const video = { readyState: 2, videoWidth: 640, videoHeight: 480, currentTime: 0,
     requestVideoFrameCallback(cb) { callback = cb; return ++requests; },
     cancelVideoFrameCallback() { cancelled++; },
   };
@@ -112,7 +113,7 @@ test('RAF fallback deduplicates video time and cancels its own callback', t => {
     if (raf) Object.defineProperty(globalThis, 'requestAnimationFrame', raf); else delete globalThis.requestAnimationFrame;
     if (caf) Object.defineProperty(globalThis, 'cancelAnimationFrame', caf); else delete globalThis.cancelAnimationFrame;
   });
-  const video = { readyState: 2, currentTime: 0 };
+  const video = { readyState: 2, videoWidth: 640, videoHeight: 480, currentTime: 0 };
   const pump = new VideoFramePump(video, () => { calls++; return 1; }, () => {}, () => now);
   pump.start(); callback(0); now = 40; callback(40);
   assert.equal(calls, 1);
@@ -134,4 +135,34 @@ test('metrics separate inference, confirmation and animation; stale responses ar
   metrics.rendered({ id: 99, animationStartMs: 999 });
   assert.equal(metrics.animationStartMs, 32);
   assert.equal(metrics.snapshot(2000).cameraFPS, 0);
+});
+
+test('late video metadata and invalid frame timestamps never enter inference', () => {
+  const fake = fakeVideo(); let calls = 0, now = 0;
+  const pump = new VideoFramePump(fake.video, () => { calls++; return 1; }, () => {}, () => now);
+  fake.video.videoWidth = 0; fake.video.videoHeight = 0;
+  pump.start(); fake.fire(0, 0); assert.equal(calls, 0);
+  fake.video.videoWidth = 640; fake.video.videoHeight = 480;
+  fake.video.currentTime = NaN; now = 40; fake.fire(now, NaN); assert.equal(calls, 0);
+  now = 80; fake.fire(now, 0.08); assert.equal(calls, 1);
+  now = 120; fake.video.currentTime = 0.12; fake.fire(now, 0.08);
+  assert.equal(calls, 2, 'valid currentTime can recover stalled metadata.mediaTime');
+  pump.stop();
+});
+
+test('a browser that exposes rVFC but stops delivering frames switches once to RAF polling', t => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const fake = fakeVideo(); let now = 0, callback, requests = 0, calls = 0;
+  const before = Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame');
+  const cancel = Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame');
+  globalThis.requestAnimationFrame = cb => { callback = cb; return ++requests; }; globalThis.cancelAnimationFrame = () => {};
+  t.after(() => {
+    if (before) Object.defineProperty(globalThis, 'requestAnimationFrame', before); else delete globalThis.requestAnimationFrame;
+    if (cancel) Object.defineProperty(globalThis, 'cancelAnimationFrame', cancel); else delete globalThis.cancelAnimationFrame;
+  });
+  const pump = new VideoFramePump(fake.video, () => { calls++; return 1; }, () => {}, () => now);
+  pump.start(); now = 1600; t.mock.timers.tick(1600);
+  assert.equal(fake.cancelled(), 1); assert.equal(requests, 1);
+  fake.video.currentTime = 1.6; callback(now); assert.equal(calls, 1);
+  pump.stop();
 });

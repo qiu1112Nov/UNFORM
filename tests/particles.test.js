@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ParticleField } from '../src/particles.js';
 import { GestureResponse } from '../src/gesture-pipeline.js';
+import { FragmentLayers } from '../src/flow-state.js';
 
 function createField(t, { width = 390, context: providedContext } = {}) {
   // Exercise the real simulation without requiring a GPU or granting camera access.
@@ -89,14 +90,14 @@ test('pre-response reaches particle projection before confirmation without chang
   const before = field.points.map(p => ({ x: p.x, y: p.y }));
   const hand = controller.update({ x: 0.5, y: 0.5, openness: 1 }, 0);
   field.setHand({ ...hand, dispatchedAt: 0 });
-  field.update(1 / 60); field.update(1 / 60);
+  field.update(1 / 60, 16); field.update(1 / 60, 33);
   assert.equal(controller.confirmed, null);
   const displacement = Math.max(...field.points.map((p, i) => Math.hypot(p.x - before[i].x, p.y - before[i].y)));
   assert.ok(displacement > 0.5 && displacement < field.scale * 0.1);
   const continuous = field.points[400].x;
   field.setHand({ ...controller.update({ x: 0.5, y: 0.5, openness: 1 }, 80), dispatchedAt: 80 });
   assert.equal(field.points[400].x, continuous, 'confirming input does not jump particle coordinates');
-  field.update(1 / 60);
+  field.update(1 / 60, 97);
   assert.ok(Math.abs(field.points[400].x - continuous) < field.scale * 0.05);
   assert.equal(field.dispersion, 0.55); assert.equal(field.inertia, 0.65);
 });
@@ -106,7 +107,7 @@ test('reverse pre-response retargets live motion rather than an unreached confir
   const opened = { x: 0.5, y: 0.5, openness: 1 };
   controller.update(opened, 0);
   field.setHand({ ...controller.update(opened, 80), dispatchedAt: 80 });
-  field.update(1 / 60);
+  field.update(1 / 60, 90);
   assert.ok(field.activation.value < 0.14, 'formal opening has only just started');
   const closing = controller.update({ ...opened, openness: 0 }, 90);
   field.setHand({ ...closing, dispatchedAt: 90 });
@@ -186,4 +187,39 @@ test('desktop keeps 1900 particles, 12 trace samples and full per-link weave ren
   assert.equal(field.count, 1900); assert.equal(field.dpr, 2); assert.equal(field.trace.samples, 12);
   field.weave.charge.fill(1); strokes = 0; field.drawWeave();
   assert.equal(strokes, field.mesh.links.length);
+});
+
+for (const fps of [10, 30, 60]) test(`real render loop preserves elapsed-time amplitude at ${fps} FPS`, t => {
+  const field = createField(t), expected = new FragmentLayers();
+  field.setHand({ x: 0.5, y: 0.5, openness: 1, activation: 1, targetActivation: 1 });
+  field.last = 100;
+  for (let frame = 1; frame <= fps; frame++) field.animate(100 + frame * 1000 / fps);
+  expected.update(1, 1);
+  field.fragments.states.forEach((state, i) => assert.ok(Math.abs(state.value - expected.states[i].value) < 1e-9));
+  assert.equal(field.targetActivation, 1); assert.equal(field.dispersion, 0.55); assert.equal(field.inertia, 0.65);
+});
+
+test('an opposite unconfirmed pose does not freeze the confirmed fragment goal, and stalled input expires', t => {
+  const field = createField(t), response = new GestureResponse();
+  const palm = { x: 0.5, y: 0.5, openness: 1 };
+  response.update(palm, 0); field.setHand(response.update(palm, 80)); field.update(1 / 60, 80);
+  field.setHand(response.update({ ...palm, openness: 0 }, 100));
+  for (let i = 0; i < 15; i++) field.update(1 / 60, 100 + i * 16);
+  assert.equal(field.fragments.goal, 1);
+  assert.ok(field.fragments.states[0].value > 0.6, 'confirmed state progresses during reverse preview');
+  field.update(1 / 60, 451);
+  assert.equal(field.hand, null); assert.equal(field.targetActivation, 0);
+});
+
+test('short credible gestures restore a visible bounded preview without falsely confirming the full sculpture', t => {
+  const field = createField(t), response = new GestureResponse();
+  field.setHand(response.update({ x: 0.5, y: 0.5, openness: 1 }, 0));
+  for (let i = 1; i <= 4; i++) field.update(1 / 60, i * 1000 / 60);
+  const feedback = field.quickFeedback.value;
+  field.quickFeedback.value = 0; field.projectAll();
+  const before = visiblePoints(field).map(p => [p.x, p.y]);
+  field.quickFeedback.value = feedback; field.projectAll();
+  const displacement = Math.max(...visiblePoints(field).map((p, i) => Math.hypot(p.x - before[i][0], p.y - before[i][1])));
+  assert.ok(displacement > 2 && displacement < field.scale * 0.2, 'brief input has visible but limited geometry feedback');
+  assert.equal(response.confirmed, null); assert.equal(field.fragments.goal, 0);
 });
