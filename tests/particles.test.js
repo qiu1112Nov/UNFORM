@@ -49,7 +49,7 @@ test('a fast swipe after a stationary hold tears locally and particles recover',
   assert.ok(field.weave.charge.every(v => v === 0));
 });
 
-test('continuous open palm deconstructs; a fist rebuilds edges, faces, then interior', t => {
+test('FLOW STATE deconstructs vertices first and rebuilds the interior before edges and vertices', t => {
   const field = createField(t);
   assert.equal(field.dispersion, 0.55);
   assert.ok(field.points.every(p => p.deformation.value === 0), 'idle strength does not explode the sculpture');
@@ -64,13 +64,13 @@ test('continuous open palm deconstructs; a fist rebuilds edges, faces, then inte
   field.dispersion = 0.85; field.projectAll();
   assert.ok(medium > 0 && displacement() > medium, 'strength actually controls spread and retained geometry');
   field.dispersion = 0.55;
-  const edge = field.points.find(p => p.kind === 'edge');
-  const surface = field.points.find(p => p.kind === 'surface');
-  const interior = field.points.find(p => p.kind === 'interior');
+  const vertex = field.points.find(p => p.layer === 0);
+  const surface = field.points.find(p => p.layer === 1);
+  const interior = field.points.find(p => p.layer === 2);
   field.hand.openness = 0;
   for (let i = 0; i < 12; i++) field.update(1 / 60);
-  assert.ok(edge.deformation.value < surface.deformation.value);
-  assert.ok(surface.deformation.value < interior.deformation.value);
+  assert.ok(interior.deformation.value < surface.deformation.value);
+  assert.ok(surface.deformation.value < vertex.deformation.value);
   const before = surface.deformation.value;
   field.hand.openness = 1; field.update(1 / 120);
   assert.ok(Math.abs(surface.deformation.value - before) < 0.08, 'interrupting recovery does not jump or reset velocity');
@@ -109,4 +109,42 @@ test('reverse pre-response retargets live motion rather than an unreached confir
   field.setHand({ ...closing, dispatchedAt: 90 });
   assert.equal(closing.activation, 0.86, 'controller retains its confirmed endpoint');
   assert.equal(field.previewTarget, 0, 'renderer starts gathering from its actual current state');
+});
+
+test('fast hand input creates only budgeted local 3D traces which expire after stillness', t => {
+  const field = createField(t);
+  assert.equal(field.points.filter(p => p.flow).length, 102);
+  assert.equal(field.points.filter(p => p.traceSlot >= 0).length, 15);
+  const storage = field.trace.positions;
+  const captured = new Float32Array(3), projected = { x: 0, y: 0 };
+  let checkedScenePoses = 0;
+  let x = 0.5;
+  for (let i = 0; i < 30; i++) {
+    const now = i * 1000 / 30;
+    x = 0.5 + Math.sin(i * 0.45) * 0.3;
+    field.setHand({ x, y: 0.5, openness: 0, activation: 0, feedback: 0, dispatchedAt: now });
+    field.time += 1 / 30; field.update(1 / 30, now);
+    for (let slot = 0; slot < field.trace.capacity; slot++) {
+      const index = slot * field.trace.samples + field.trace.heads[slot];
+      if (Math.abs(field.trace.times[index] - field.time) > 1e-6) continue;
+      for (let axis = 0; axis < 3; axis++) captured[axis] = field.trace.positions[index * 3 + axis];
+      field.projectTracePoint(captured, projected);
+      const p = field.points[field.trace.owners[slot]];
+      assert.ok(Math.hypot(projected.x - p.x, projected.y - p.y) < 0.001, 'history includes the current scene translation and perspective');
+      checkedScenePoses++;
+    }
+  }
+  assert.ok(field.trace.times.some(Number.isFinite), 'projected hand path captured local model-space history');
+  assert.ok(checkedScenePoses > 0);
+  assert.ok(field.points.every(p => p.traceSlot >= 0 || p.traceWeight === 0));
+  assert.equal(field.trace.positions, storage);
+  for (let i = 30; i < 60; i++) {
+    const now = i * 1000 / 30;
+    field.setHand({ x, y: 0.5, openness: 0, activation: 0, feedback: 0, dispatchedAt: now });
+    field.time += 1 / 30; field.update(1 / 30, now);
+  }
+  assert.equal(field.trace.emitting, false);
+  assert.ok(field.trace.times.every((_, index) => field.trace.opacity(index, field.time) === 0));
+  field.setForm('lines');
+  assert.ok(field.trace.times.every(time => time === -Infinity));
 });
