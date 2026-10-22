@@ -69,7 +69,7 @@ footer { height: 54px; display: flex; align-items: center; justify-content: spac
 .guide small { font-size: 10px; line-height: 1.7; color: #969999; display: block; border-top: 1px solid var(--line); padding-top: 15px; }
 .camera-monitor { position: absolute; right: 0; bottom: 136px; width: 120px; border: 1px solid #ffffff30; background: #151717; }
 .camera-monitor video { display: block; width: 100%; aspect-ratio: 4/3; object-fit: cover; transform: scaleX(-1); filter: grayscale(1); opacity: .65; }
-.camera-monitor span { display: block; font-size: 7px; letter-spacing: .8px; padding: 7px; line-height: 1.6; }
+.camera-monitor span { display: block; height: 46px; font-size: 7px; letter-spacing: .8px; padding: 7px; line-height: 1.6; }
 @media(max-width:800px) {
   .interface { padding: 0 5vw; }
   .masthead { height: 74px; gap: 0; }

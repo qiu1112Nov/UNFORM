@@ -1,6 +1,6 @@
 import { clamp, handGesture } from './geometry.js';
 
-export const GESTURE_TIMING = Object.freeze({ confirmMs: 80, maxFPS: 30, previewActivation: 0.14, lossGraceMs: 350, evidenceGapMs: 350, latchMs: 180 });
+export const GESTURE_TIMING = Object.freeze({ confirmMs: 80, maxFPS: 30, previewActivation: 0.14, lossGraceMs: 350, evidenceGapMs: 350 });
 
 // Landmark validity is a quality gate, not a fabricated model confidence score.
 // MediaPipe's own detection/presence/tracking thresholds still apply upstream.
@@ -16,7 +16,7 @@ export class GestureResponse {
     this.confirmed = null; this.candidate = null; this.position = null;
     this.lastTime = null; this.lastSeen = null; this.serial = 0; this.event = null;
     this.confirmationMs = null; this.stage = 'waiting';
-    this.target = null; this.holdUntil = -Infinity;
+    this.intentGoal = null;
     this.lastUpdate = null; this.cadenceMs = 60; this.graceMs = GESTURE_TIMING.lossGraceMs;
   }
   update(hand, now, sampledAt = now) {
@@ -46,6 +46,7 @@ export class GestureResponse {
     this.position = { x: clamp(hand.x), y: clamp(hand.y), openness: hand.openness, vx, vy };
     this.lastTime = sampledAt; this.lastSeen = now;
     const trend = hand.openness >= 0.68 ? 1 : hand.openness <= 0.32 ? 0 : null;
+    if (trend !== null) this.intentGoal = trend;
     if (this.candidate && now - this.candidate.last > Math.max(GESTURE_TIMING.evidenceGapMs, this.graceMs)) this.candidate = null;
     if (trend !== null && trend !== this.confirmed) {
       if (this.candidate?.goal !== trend) {
@@ -67,12 +68,12 @@ export class GestureResponse {
     return this.output(now, true, trend !== null);
   }
   output(now, tracked, preview = tracked) {
-    if (this.confirmed !== null && (this.target === null || now >= this.holdUntil) && this.target !== this.confirmed) {
-      this.target = this.confirmed; this.holdUntil = now + GESTURE_TIMING.latchMs;
-    }
-    const baseline = this.target ?? 0;
+    // Confirmation only changes the destination. No timed lock may restore an
+    // older goal after a valid reversal; missing/uncertain samples retain intent.
+    const baseline = this.confirmed ?? 0;
     const feedback = preview && this.candidate ? Math.sign(this.candidate.goal - baseline) : 0;
     return { ...this.position, sampledAt: this.lastTime, tracked, validUntil: this.lastSeen + this.graceMs,
+      confirmedPose: this.confirmed, previewGoal: this.intentGoal !== this.confirmed ? this.intentGoal : null,
       targetActivation: baseline, activation: baseline + feedback * GESTURE_TIMING.previewActivation,
       feedback, response: this.event };
   }
@@ -165,4 +166,11 @@ export class GestureMetrics {
     const fps = list => list.length > 1 ? (list.length - 1) * 1000 / Math.max(1, list.at(-1) - list[0]) : 0;
     return { cameraFPS: fps(this.frames), inferenceFPS: fps(this.inferences), inferenceMs: this.inferenceMs, confirmationMs: this.confirmationMs, animationStartMs: this.animationStartMs, renderQueueMs: this.renderQueueMs, stage: this.stage };
   }
+}
+
+// Display-only: the simulation receives every result immediately. Do not switch
+// labels at a second raw openness threshold or change panel height per result.
+export function gestureLabel(hand) {
+  return !hand ? 'LOOKING FOR A HAND' : hand.confirmedPose === 1 ? 'OPEN PALM / DISPERSE'
+    : hand.confirmedPose === 0 ? 'CLOSED HAND / GATHER' : 'HAND DETECTED';
 }

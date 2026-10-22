@@ -199,27 +199,64 @@ for (const fps of [10, 30, 60]) test(`real render loop preserves elapsed-time am
   assert.equal(field.targetActivation, 1); assert.equal(field.dispersion, 0.55); assert.equal(field.inertia, 0.65);
 });
 
-test('an opposite unconfirmed pose does not freeze the confirmed fragment goal, and stalled input expires', t => {
+test('an opposite preview retains the confirmed endpoint while moving the same springs, and stalled input expires', t => {
   const field = createField(t), response = new GestureResponse();
   const palm = { x: 0.5, y: 0.5, openness: 1 };
   response.update(palm, 0); field.setHand(response.update(palm, 80)); field.update(1 / 60, 80);
   field.setHand(response.update({ ...palm, openness: 0 }, 100));
   for (let i = 0; i < 15; i++) field.update(1 / 60, 100 + i * 16);
   assert.equal(field.fragments.goal, 1);
-  assert.ok(field.fragments.states[0].value > 0.6, 'confirmed state progresses during reverse preview');
+  assert.ok(field.fragments.states[0].value < 0.14, 'explicit opposite intent can immediately gather within the preview range');
   field.update(1 / 60, 451);
   assert.equal(field.hand, null); assert.equal(field.targetActivation, 0);
 });
 
-test('short credible gestures restore a visible bounded preview without falsely confirming the full sculpture', t => {
+test('a bounded preview moves real layers; changing the brightness hint cannot move geometry', t => {
   const field = createField(t), response = new GestureResponse();
+  const before = visiblePoints(field).map(p => [p.x, p.y]);
   field.setHand(response.update({ x: 0.5, y: 0.5, openness: 1 }, 0));
   for (let i = 1; i <= 4; i++) field.update(1 / 60, i * 1000 / 60);
-  const feedback = field.quickFeedback.value;
-  field.quickFeedback.value = 0; field.projectAll();
-  const before = visiblePoints(field).map(p => [p.x, p.y]);
-  field.quickFeedback.value = feedback; field.projectAll();
   const displacement = Math.max(...visiblePoints(field).map((p, i) => Math.hypot(p.x - before[i][0], p.y - before[i][1])));
-  assert.ok(displacement > 2 && displacement < field.scale * 0.2, 'brief input has visible but limited geometry feedback');
+  assert.ok(displacement > 2 && displacement < field.scale * 0.2);
+  const projected = visiblePoints(field).map(p => [p.x, p.y]);
+  field.quickFeedback.value = 0; field.projectAll();
+  assert.deepEqual(visiblePoints(field).map(p => [p.x, p.y]), projected);
   assert.equal(response.confirmed, null); assert.equal(field.fragments.goal, 0);
+  assert.ok(field.fragments.states.every(s => s.value > 0.05 && s.value <= 0.14));
+});
+
+for (const goal of [1, 0]) test(`projected particle ${goal ? 'opening' : 'gathering'} stays continuous through missing preview frames and confirmation`, t => {
+  const field = createField(t), response = new GestureResponse();
+  const base = { x: 0.5, y: 0.5, openness: 1 - goal };
+  response.update(base, 0); field.setHand(response.update(base, 80)); field.update(3, 80);
+  const points = visiblePoints(field), start = points.map(p => [p.x, p.y]);
+  const saved = points.map(p => p.deformation.value);
+  points.forEach(p => { p.deformation.value = goal; }); field.projectAll();
+  const end = points.map(p => [p.x, p.y]);
+  points.forEach((p, i) => { p.deformation.value = saved[i]; }); field.projectAll();
+  let index = -1, distance = 0;
+  points.forEach((p, i) => {
+    const d = Math.hypot(end[i][0] - start[i][0], end[i][1] - start[i][1]);
+    if (p.layer === (goal ? 2 : 0) && d > distance) { index = i; distance = d; }
+  });
+  assert.ok(distance > 1);
+  const point = points[index], dx = end[index][0] - start[index][0], dy = end[index][1] - start[index][1];
+  let previous = 0;
+  field.setHand(response.update({ ...base, openness: goal }, 100));
+  for (let frame = 1; frame <= 72; frame++) {
+    const now = 100 + frame * 1000 / 60;
+    if (frame % 6 === 0) {
+      const before = [point.x, point.y];
+      field.setHand(response.update(frame === 6 ? null : frame === 18 ? { ...base, openness: 0.5 } : { ...base, openness: goal }, now));
+      assert.deepEqual([point.x, point.y], before, 'new input never resets projected coordinates');
+    }
+    // Freeze idle rotation/FLOW time so this measures gesture displacement,
+    // rather than mistaking an unrelated orbit for a gesture reversal.
+    field.update(1 / 60, now);
+    const progress = ((point.x - start[index][0]) * dx + (point.y - start[index][1]) * dy) / (distance * distance);
+    assert.ok(progress >= previous - 0.001, `uncommanded return at ${now}ms: ${previous} → ${progress}`);
+    previous = progress;
+    if (frame === 3) assert.ok(progress > 0.02, 'preview remains visibly responsive');
+  }
+  assert.ok(previous > 0.99);
 });

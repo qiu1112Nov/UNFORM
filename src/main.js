@@ -1,6 +1,7 @@
 import './style.css';
 import { ParticleField } from './particles.js';
 import { HandCamera } from './camera.js';
+import { gestureLabel } from './gesture-pipeline.js';
 import { MOTION } from './motion.js';
 
 const $ = selector => document.querySelector(selector);
@@ -90,7 +91,8 @@ if (field) {
     // Position filtering and confirmation run once upstream. Do not add an
     // openness EMA here: it delays both the trend and the spring response.
     field.setHand(hand);
-    $('#hand-status').textContent = !hand ? 'LOOKING FOR A HAND' : hand.openness > 0.55 ? 'OPEN PALM / DISPERSE' : 'CLOSED HAND / GATHER';
+    const label = gestureLabel(hand);
+    if ($('#hand-status').textContent !== label) $('#hand-status').textContent = label;
   }, { mobile: field.mobile, renderStats: () => field.quality });
   field.onGestureRendered = sample => camera.metrics.rendered(sample);
   const debugMode = new URLSearchParams(location.search).get('debug');
@@ -104,7 +106,7 @@ if (field) {
     const timer = setInterval(() => {
       const metrics = camera.metrics.snapshot(performance.now());
       const diagnostic = camera.diagnostics();
-      const fidelity = `\nGesture: ${camera.response.confirmed === null ? 'unknown' : camera.response.confirmed ? 'open' : 'fist'} / ${camera.response.stage}\nTarget deconstruction: ${(field.targetActivation * field.dispersion * 100).toFixed(1)}%\nActual layers: ${field.fragments.states.map(s => (s.value * field.dispersion * 100).toFixed(1)).join(' / ')}%\nCamera/model/inference: ${diagnostic.camera} / ${diagnostic.model} / ${diagnostic.inference}\nVideo ready/time: ${diagnostic.readyState} / ${Number(diagnostic.mediaTime).toFixed(3)}s\nFacing: requested user / actual ${diagnostic.facingMode}\nHand detected: ${diagnostic.hasHand} / last success: ${diagnostic.lastRecognitionAt === null ? 'never' : ((performance.now() - diagnostic.lastRecognitionAt) / 1000).toFixed(1) + 's ago'}\nError/fallback reason: ${diagnostic.error || 'none'}`;
+      const fidelity = `\nGesture: ${camera.response.confirmed === null ? 'unknown' : camera.response.confirmed ? 'open' : 'fist'} / ${camera.response.stage}\nTarget deconstruction: ${(field.targetActivation * field.dispersion * 100).toFixed(1)}%\nMotion: ${field.fragments.previewGoal === null ? 'formal' : 'preview'} / same layer springs\nActual layers: ${field.fragments.states.map(s => (s.value * field.dispersion * 100).toFixed(1)).join(' / ')}%\nCamera/model/inference: ${diagnostic.camera} / ${diagnostic.model} / ${diagnostic.inference}\nVideo ready/time: ${diagnostic.readyState} / ${Number(diagnostic.mediaTime).toFixed(3)}s\nFacing: requested user / actual ${diagnostic.facingMode}\nHand detected: ${diagnostic.hasHand} / last success: ${diagnostic.lastRecognitionAt === null ? 'never' : ((performance.now() - diagnostic.lastRecognitionAt) / 1000).toFixed(1) + 's ago'}\nError/fallback reason: ${diagnostic.error || 'none'}`;
       const inferenceDetails = `\nInput: ${camera.input?.width ?? 0}×${camera.input?.height ?? 0} / camera ${camera.sourceWidth}×${camera.sourceHeight}\nCapture + bitmap: ${ms(camera.captureMs)}\nFrame → result: ${ms(camera.roundTripMs)}\nPacing interval: ${ms(camera.pump?.intervalMs ?? null)} / in flight: ${camera.pump?.busy ? 1 : 0}`;
       text.textContent = debugMode === 'performance'
         ? `FPS: ${(field.paused ? 0 : field.quality.fps).toFixed(1)}\nParticles: ${field.budget.length} visible / ${field.count} target / ${field.poolCount} pooled\nUpdate: ${ms(field.quality.updateMs)}\nDraw submission: ${ms(field.quality.drawMs)}\nMain work EMA: ${ms(field.quality.workEMA)}\nDPR: ${field.dpr.toFixed(2)} / quality: ${field.mobile ? field.quality.level : 'desktop'}\nTRACE samples: ${field.trace.samples}\nInference: ${ms(metrics.inferenceMs)} / ${camera.inferenceMode}\nCamera: ${metrics.cameraFPS.toFixed(1)} fps / inference: ${metrics.inferenceFPS.toFixed(1)} fps\n*CPU/Canvas submission; excludes display/compositor cost`

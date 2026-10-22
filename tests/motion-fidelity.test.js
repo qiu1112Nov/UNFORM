@@ -6,14 +6,14 @@ import { FragmentLayers, SpatialTrace } from '../src/flow-state.js';
 const palm = { x: 0.3, y: 0.5, openness: 1 };
 const fist = { ...palm, openness: 0 };
 
-test('a confirmed short palm survives immediate reversal, with only the latest opposite target retained', () => {
+test('confirmed reversals apply immediately without a competing timed target lock', () => {
   const response = new GestureResponse();
   response.update(palm, 0);
   assert.equal(response.update(palm, 80).targetActivation, 1);
   const reverse = response.update(fist, 100);
   assert.equal(reverse.feedback, -1);
   assert.equal(reverse.targetActivation, 1, 'preview cannot shrink a confirmed fragment goal');
-  assert.equal(response.update(fist, 180).targetActivation, 1, 'bounded short latch retains observed action');
+  assert.equal(response.update(fist, 180).targetActivation, 0, 'formal confirmation has no extra latch delay');
   assert.equal(response.confirmed, 0);
   assert.equal(response.update(fist, 270).targetActivation, 0, 'reverse is applied without requiring it to stay held for an animation');
 });
