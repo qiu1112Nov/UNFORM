@@ -1,6 +1,7 @@
 import { clamp, formPoint } from './geometry.js';
 import { advanceSpring, MOTION, recoveryRate, retained, springCoefficients } from './motion.js';
 import { GESTURE_TIMING } from './gesture-pipeline.js';
+import { advanceEdgeFlow, createEdgeFlow, FLOW_STATE, fragmentLayer, FragmentLayers, SpatialTrace } from './flow-state.js';
 import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 
 export class ParticleField {
@@ -10,12 +11,19 @@ export class ParticleField {
     if (!this.ctx) throw new Error('Canvas 2D is unavailable.');
     this.mobile = matchMedia('(max-width: 800px)').matches || (navigator.hardwareConcurrency || 4) <= 4;
     this.count = this.mobile ? 850 : 1900;
+    this.fragments = new FragmentLayers();
+    this.trace = new SpatialTrace(this.count, this.mobile);
+    this.traceWorldA = new Float32Array(3); this.traceWorldB = new Float32Array(3);
+    this.traceCapture = new Float32Array(3);
+    this.traceScreenA = { x: 0, y: 0 }; this.traceScreenB = { x: 0, y: 0 };
     this.mesh = buildSurfaceMesh(this.mobile ? 6 : 8);
     this.weave = new WeaveNetwork(this.mesh);
     this.points = Array.from({ length: this.count }, (_, i) => {
       const sample = octahedronParticle(i, this.count);
       return {
         kind: sample.kind, home: sample.point, position: [...sample.point], target: [...sample.point],
+        layer: fragmentLayer(sample.kind, sample.point), flow: createEdgeFlow(i, this.count, sample.point),
+        world: new Float32Array(sample.point), traceSlot: -1, traceWeight: 0,
         motion: sample.point.map(value => ({ value, velocity: 0 })),
         deformation: { value: 0, velocity: 0 },
         scatterMotion: { value: 0, velocity: 0 },
@@ -24,6 +32,7 @@ export class ParticleField {
         scatter: 0, x: 0, y: 0, depth: 0,
       };
     });
+    for (let slot = 0; slot < this.trace.capacity; slot++) this.points[this.trace.owners[slot]].traceSlot = slot;
     this.form = 'octahedron'; this.dispersion = MOTION.deconstructionStrength;
     this.inertia = MOTION.motionInertia;
     this.activation = { value: 0, velocity: 0 }; this.impulse = 0;
@@ -70,6 +79,7 @@ export class ParticleField {
 
   setForm(form) {
     this.form = form; this.clearPointers(); this.weave.clear();
+    this.trace.clear();
     this.points.forEach((p, i) => { p.target = form === 'octahedron' ? p.home : formPoint(form, i, this.count); });
   }
 
@@ -90,6 +100,7 @@ export class ParticleField {
 
   setHand(hand) {
     this.hand = hand;
+    this.trace.hand(hand, hand?.dispatchedAt ?? performance.now());
     if (!hand) { this.pendingGesture = null; this.lastResponseId = null; return; }
     if (hand.response && hand.response.id !== this.lastResponseId) {
       this.lastResponseId = hand.response.id;
@@ -151,7 +162,7 @@ export class ParticleField {
     const dt = this.last ? Math.min((now - this.last) / 1000, 0.05) : 1 / 60;
     this.last = now;
     if (!this.paused) {
-      this.time += dt; this.update(dt); this.draw();
+      this.time += dt; this.update(dt, now); this.draw();
       const pending = this.pendingGesture;
       // A rendering proxy excludes idle rotation: it measures gesture-driven
       // deformation, approximately >=0.5 CSS px, after Canvas commands submit.
@@ -165,7 +176,7 @@ export class ParticleField {
     this.frame = requestAnimationFrame(this.animate);
   }
 
-  update(dt) {
+  update(dt, now = performance.now()) {
     const coefficients = springCoefficients(dt, this.inertia);
     const scatterCoefficients = springCoefficients(dt, this.inertia, 2);
     const layers = {
@@ -193,6 +204,10 @@ export class ParticleField {
     // Retarget the preview relative to the live animation, not a previous
     // confirmed endpoint: a fist can interrupt a still-opening sculpture.
     const target = this.hand?.feedback ? this.previewTarget : this.hand?.activation ?? spread * spread;
+    // Confirmation gates only the staged fragment wave. The independent quick
+    // response still renders immediately, without consuming its 80ms staggering.
+    this.fragments.update(this.hand?.feedback ? this.fragments.goal : target, dt, this.inertia);
+    this.trace.update(dt, now, this.inertia);
     this.impulse = clamp(advanceSpring(this.activation, target, coefficients));
     // Small, fast additive feedback. It fades into the unchanged 65% inertia
     // spring on confirmation or cancellation instead of snapping particle positions.
@@ -204,25 +219,40 @@ export class ParticleField {
     this.centerY = advanceSpring(this.centerMotionY, this.originY + hy, coefficients);
     for (const p of this.points) {
       const layer = layers[p.kind];
-      advanceSpring(p.deformation, target, layer);
+      if (this.form === 'octahedron') {
+        const state = this.fragments.states[p.layer];
+        p.deformation.value = state.value; p.deformation.velocity = state.velocity;
+      } else advanceSpring(p.deformation, target, layer);
       const thread = this.form === 'octahedron' && p.thread;
       const pull = thread ? this.weave.strength(thread.link) * 0.92 : 0;
+      const flowing = this.form === 'octahedron' && p.flow;
+      if (flowing) advanceEdgeFlow(flowing, this.time);
+      const base = flowing ? flowing.position : p.target;
       for (let axis = 0; axis < 3; axis++) {
-        const target = p.target[axis] + (thread ? (thread.point[axis] - p.target[axis]) * pull : 0);
+        const target = base[axis] + (thread ? (thread.point[axis] - base[axis]) * pull : 0);
         p.position[axis] = advanceSpring(p.motion[axis], target, layer);
       }
       p.scatter *= Math.exp(-dt * recoveryRate(this.inertia));
       advanceSpring(p.scatterMotion, p.scatter, scatterCoefficients);
     }
     this.projectAll();
+    if (this.form === 'octahedron') for (let slot = 0; slot < this.trace.capacity; slot++) {
+      const p = this.points[this.trace.owners[slot]];
+      // Preserve the scene pose at capture time, including hand translation.
+      // Object-local history would move with the sculpture and erase its trail.
+      const inversePerspective = (4.5 - p.depth) / 4.5;
+      this.traceCapture[0] = (p.x - this.originX) / this.scale * inversePerspective;
+      this.traceCapture[1] = -(p.y - this.originY) / this.scale * inversePerspective;
+      this.traceCapture[2] = p.depth;
+      this.trace.capture(slot, this.traceCapture, this.time, p.traceWeight);
+    }
   }
 
   project(point, destination) {
-    const yaw = this.time * 0.075 + 0.6, pitch = -0.12 + Math.sin(this.time * 0.1) * 0.035;
-    const x = point[0] * Math.cos(yaw) + point[2] * Math.sin(yaw);
-    const z = -point[0] * Math.sin(yaw) + point[2] * Math.cos(yaw);
-    const y = point[1] * Math.cos(pitch) - z * Math.sin(pitch);
-    const depth = point[1] * Math.sin(pitch) + z * Math.cos(pitch);
+    const x = point[0] * this.yawCos + point[2] * this.yawSin;
+    const z = -point[0] * this.yawSin + point[2] * this.yawCos;
+    const y = point[1] * this.pitchCos - z * this.pitchSin;
+    const depth = point[1] * this.pitchSin + z * this.pitchCos;
     const perspective = 4.5 / (4.5 - depth);
     destination.x = this.centerX + x * this.scale * perspective;
     destination.y = this.centerY - y * this.scale * perspective;
@@ -230,15 +260,55 @@ export class ParticleField {
   }
 
   projectAll() {
+    const yaw = this.time * 0.075 + 0.6, pitch = -0.12 + Math.sin(this.time * 0.1) * 0.035;
+    this.yawCos = Math.cos(yaw); this.yawSin = Math.sin(yaw);
+    this.pitchCos = Math.cos(pitch); this.pitchSin = Math.sin(pitch);
+    const tx = this.originX + (this.trace.handX - 0.5) * this.scale * 1.8;
+    const ty = this.originY + (this.trace.handY - 0.5) * this.scale * 1.8;
+    const traceEnergy = this.form === 'octahedron' ? clamp(this.trace.energy.value) : 0;
     for (let i = 0; i < this.points.length; i++) {
       const p = this.points[i];
       const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
       const amount = (clamp(p.deformation.value + this.quickFeedback.value * 0.025) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
-      const position = p.position.map((v, axis) => v * (1 + amount * 0.45) + Math.sin(p.seed + axis * 2.1 + this.time * 0.28) * (amount + drift));
-      this.project(position, p);
+      for (let axis = 0; axis < 3; axis++) p.world[axis] = p.position[axis] * (1 + amount * 0.45) + Math.sin(p.seed + axis * 2.1 + this.time * 0.28) * (amount + drift);
+      p.traceWeight = 0;
+      if (p.traceSlot >= 0 && traceEnergy > 0.005) {
+        const dx = (p.x - tx) / this.scale, dy = (p.y - ty) / this.scale;
+        const local = traceEnergy * clamp(1 - Math.hypot(dx, dy) / FLOW_STATE.trace.radius);
+        p.world[0] -= dy * local * FLOW_STATE.trace.swirl;
+        p.world[1] -= dx * local * FLOW_STATE.trace.swirl;
+        p.traceWeight = this.trace.emitting ? local : 0;
+      }
+      this.project(p.world, p);
     }
     this.mesh.nodes.forEach((point, i) => this.project(point, this.nodeScreens[i]));
+  }
+
+  drawTraces() {
+    const ctx = this.ctx, trace = this.trace;
+    ctx.lineWidth = 0.6; ctx.setLineDash([]);
+    for (let slot = 0; slot < trace.capacity; slot++) for (let step = 0; step < trace.samples - 1; step++) {
+      const a = slot * trace.samples + (trace.heads[slot] + trace.samples - step) % trace.samples;
+      const b = slot * trace.samples + (trace.heads[slot] + trace.samples - step - 1) % trace.samples;
+      const opacity = Math.min(trace.opacity(a, this.time), trace.opacity(b, this.time));
+      if (opacity < 0.003 || trace.times[a] - trace.times[b] > 0.12) continue;
+      let distance = 0;
+      for (let axis = 0; axis < 3; axis++) {
+        this.traceWorldA[axis] = trace.positions[a * 3 + axis]; this.traceWorldB[axis] = trace.positions[b * 3 + axis];
+        distance += (this.traceWorldA[axis] - this.traceWorldB[axis]) ** 2;
+      }
+      if (distance > 0.35 ** 2) continue;
+      this.projectTracePoint(this.traceWorldA, this.traceScreenA); this.projectTracePoint(this.traceWorldB, this.traceScreenB);
+      ctx.strokeStyle = `rgba(255,255,255,${opacity})`;
+      ctx.beginPath(); ctx.moveTo(this.traceScreenA.x, this.traceScreenA.y); ctx.lineTo(this.traceScreenB.x, this.traceScreenB.y); ctx.stroke();
+    }
+  }
+
+  projectTracePoint(point, destination) {
+    const perspective = 4.5 / (4.5 - point[2]);
+    destination.x = this.originX + point[0] * this.scale * perspective;
+    destination.y = this.originY - point[1] * this.scale * perspective;
   }
 
   drawWeave() {
@@ -258,7 +328,8 @@ export class ParticleField {
       const [ia, ib] = this.mesh.links[i];
       const a = this.nodeScreens[ia], b = this.nodeScreens[ib];
       const strength = this.weave.strength(i);
-      const integrity = 1 - this.impulse * (retained(i, this.dispersion) ? 0.12 : 1);
+      const edgeActivation = this.form === 'octahedron' ? clamp(this.fragments.states[1].value) : this.impulse;
+      const integrity = 1 - edgeActivation * (retained(i, this.dispersion) ? 0.12 : 1);
       const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
       const base = this.mesh.boundary[i] ? 0.12 * intact : 0;
       if ((strength < 0.025 && base < 0.005) || integrity < 0.025) continue;
@@ -275,6 +346,7 @@ export class ParticleField {
     ctx.fillStyle = '#101111'; ctx.fillRect(0, 0, this.width, this.height);
     ctx.save(); ctx.beginPath(); ctx.rect(12, this.artTop, this.width - 24, this.artBottom - this.artTop); ctx.clip();
     if (this.form === 'octahedron') this.drawWeave();
+    if (this.form === 'octahedron') this.drawTraces();
     // Batch tiny light points; a few shards provide scale without heavy glow.
     for (let group = 0; group < 3; group++) {
       // A tiny light pulse also acknowledges a reversal while retained inertia
@@ -283,7 +355,8 @@ export class ParticleField {
       ctx.fillStyle = `rgba(255,255,255,${[0.27, 0.55, 0.88][group] + hint})`; ctx.beginPath();
       for (let i = group; i < this.count; i += 3) {
         const p = this.points[i];
-        const radius = (p.kind === 'interior' ? 0.45 : 0.65) + (p.depth + 1) * 0.22;
+        const pulse = p.flow && this.form === 'octahedron' ? 1 + FLOW_STATE.flow.luminance * Math.sin(this.time * 0.9 + p.seed) : 1;
+        const radius = ((p.kind === 'interior' ? 0.45 : 0.65) + (p.depth + 1) * 0.22) * pulse;
         if (i % 23 === 0) {
           const r = radius * 1.8;
           ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r * 0.55, p.y); ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r * 0.55, p.y); ctx.closePath();
