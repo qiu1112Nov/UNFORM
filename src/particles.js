@@ -4,6 +4,7 @@ import { GESTURE_TIMING } from './gesture-pipeline.js';
 import { advanceEdgeFlow, createEdgeFlow, FLOW_STATE, fragmentLayer, FragmentLayers, SpatialTrace } from './flow-state.js';
 import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 import { AdaptiveQuality, MOBILE_PERFORMANCE, ParticleBudget } from './performance.js';
+import { ShapeMemory } from './imprint.js';
 
 export class ParticleField {
   constructor(canvas) {
@@ -22,6 +23,8 @@ export class ParticleField {
     this.traceScreenA = { x: 0, y: 0 }; this.traceScreenB = { x: 0, y: 0 };
     this.mesh = buildSurfaceMesh(this.mobile ? 6 : 8);
     this.weave = new WeaveNetwork(this.mesh);
+    this.memory = new ShapeMemory(); this.materialPoint = new Float64Array(3);
+    this.sculptOffset = new Float64Array(3);
     this.points = Array.from({ length: this.poolCount }, (_, i) => {
       const sample = octahedronParticle(i, this.poolCount);
       return {
@@ -124,9 +127,32 @@ export class ParticleField {
 
   reset() {
     if (this.mode !== 'SCULPT') return false;
+    this.memory.restore(); this.onMemoryChange?.('RESTORE');
     this.focus = null; this.setHand(null);
     this.dispersion = MOTION.deconstructionStrength; this.inertia = MOTION.motionInertia;
     this.setForm('octahedron');
+  }
+
+  undoImprint() {
+    if (this.mode !== 'SCULPT' || !this.memory.commits.length) return false;
+    this.clearPointers(); this.sculptHeld = false;
+    this.memory.undo(); this.onMemoryChange?.('UNDO');
+    this.projectAll(); this.draw(); return true;
+  }
+
+  // Invert the current observation and sculpture rotations once per touch.
+  localDragVector(x, y, depth) {
+    let z = 0;
+    const factor = (4.5 - depth) / (4.5 * this.scale);
+    x *= factor; y *= -factor;
+    if (this.viewRotated) {
+      z = -y * this.viewPitchSin; y *= this.viewPitchCos;
+      const oldX = x; x = x * this.viewYawCos - z * this.viewYawSin;
+      z = oldX * this.viewYawSin + z * this.viewYawCos;
+    }
+    const oldY = y; y = y * this.pitchCos + z * this.pitchSin;
+    z = -oldY * this.pitchSin + z * this.pitchCos;
+    return [x * this.yawCos - z * this.yawSin, y, x * this.yawSin + z * this.yawCos];
   }
 
   nearestNode(point) {
@@ -164,6 +190,18 @@ export class ParticleField {
     const point = { x, y, time: now, quiet: 0, tearing: false };
     this.pointers.set(id, point); this.focus = point;
     if (this.form === 'octahedron') {
+      let nearest = null, distance = Math.max(38, this.scale * 0.3);
+      for (let slot = 0; slot < this.budget.length; slot++) {
+        const particle = this.points[this.budget.indices[slot]];
+        const d = Math.hypot(particle.x - x, particle.y - y);
+        if (d < distance) { distance = d; nearest = particle; }
+      }
+      if (nearest) {
+        point.dragX = x; point.dragY = y;
+        point.basisX = this.localDragVector(1, 0, nearest.depth);
+        point.basisY = this.localDragVector(0, 1, nearest.depth);
+        this.memory.begin(id, nearest.position, x, y, now);
+      }
       const node = this.nearestNode(point);
       if (node >= 0) this.weave.begin(id, node);
     }
@@ -188,6 +226,10 @@ export class ParticleField {
     this.focus = { x, y };
     if (!previous) return;
     const point = { x, y };
+    if (previous.basisX) {
+      for (let a = 0; a < 3; a++) this.sculptOffset[a] = (x - previous.dragX) * previous.basisX[a] + (y - previous.dragY) * previous.basisY[a];
+      this.memory.move(id, x, y, now, this.sculptOffset);
+    }
     const distance = Math.hypot(x - previous.x, y - previous.y);
     // A stationary hold can last seconds before the first move. Exclude dwell
     // time so that the first fast swipe after a long press still tears threads.
@@ -201,12 +243,14 @@ export class ParticleField {
 
   pointerUp(id, cancelled = false) {
     if (this.mode === 'VIEW') { this.viewPointers.delete(id); return; }
+    this.memory.end(id);
     if (cancelled) this.weave.cancel(id); else this.weave.release(id);
     this.pointers.delete(id);
     this.focus = this.pointers.size ? [...this.pointers.values()][0] : null;
   }
 
   clearPointers() {
+    this.memory.cancelAll();
     this.pointers.clear(); this.viewPointers.clear(); this.weave.sources.clear(); this.focus = null;
   }
 
@@ -259,6 +303,7 @@ export class ParticleField {
     if (this.hand?.validUntil !== undefined && now > this.hand.validUntil) this.setHand(null);
     this.budget.advance(dt);
     const coefficients = springCoefficients(dt, this.inertia);
+    if (this.memory.update(dt, this.inertia, this.pointers.size === 1 && this.form === 'octahedron')) this.onMemoryChange?.('COMMIT');
     const scatterCoefficients = springCoefficients(dt, this.inertia, 2);
     const layers = {
       edge: springCoefficients(dt, this.inertia, 1.3),
@@ -380,7 +425,8 @@ export class ParticleField {
       const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
       const amount = (clamp(p.deformation.value) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
-      for (let axis = 0; axis < 3; axis++) p.world[axis] = p.position[axis] * (1 + amount * 0.45) + (p.driftSin[axis] * driftCos + p.driftCos[axis] * driftSin) * (amount + drift);
+      const material = this.form === 'octahedron' ? this.memory.deform(p.position, this.materialPoint) : p.position;
+      for (let axis = 0; axis < 3; axis++) p.world[axis] = material[axis] * (1 + amount * 0.45) + (p.driftSin[axis] * driftCos + p.driftCos[axis] * driftSin) * (amount + drift);
       p.traceWeight = 0;
       if (p.traceSlot >= 0 && traceEnergy > 0.005) {
         const dx = (p.x - tx) / this.scale, dy = (p.y - ty) / this.scale;
@@ -391,7 +437,7 @@ export class ParticleField {
       }
       this.project(p.world, p);
     }
-    this.mesh.nodes.forEach((point, i) => this.project(point, this.nodeScreens[i]));
+    this.mesh.nodes.forEach((point, i) => this.project(this.memory.deform(point, this.materialPoint), this.nodeScreens[i]));
   }
 
   drawTraces() {

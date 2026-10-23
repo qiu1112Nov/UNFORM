@@ -3,6 +3,7 @@ import { ParticleField } from './particles.js';
 import { HandCamera } from './camera.js';
 import { gestureLabel } from './gesture-pipeline.js';
 import { MOTION } from './motion.js';
+import { IMPRINT } from './imprint.js';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#particle-field');
@@ -19,6 +20,13 @@ if (field) {
     $('#motion-profile').textContent = `${MOTION.dynamicStyle} / HYBRID · INERTIA ${Math.round(field.inertia * 100)}%`;
   };
   syncParameters();
+  const syncMemory = () => { $('#undo').disabled = field.mode !== 'SCULPT' || !field.memory.commits.length; };
+  field.onMemoryChange = action => {
+    syncMemory();
+    status.textContent = action === 'COMMIT' ? `IMPRINT / Local shape remembered (${field.memory.commits.length}/${IMPRINT.maxCommits}). Release to soften.`
+      : action === 'UNDO' ? 'UNDO / Last imprint removed.' : 'RESTORE / Original form restored.';
+  };
+  $('#undo').addEventListener('click', () => { field.undoImprint(); });
   const pause = $('#pause');
   const inputMode = $('#input-mode');
   const pointerMode = matchMedia('(pointer: coarse)').matches ? 'TOUCH MODE' : 'POINTER MODE';
@@ -52,7 +60,7 @@ if (field) {
     if (field.reset() === false) return;
     setForm('octahedron'); syncParameters();
     if (field.paused) { field.update(1); field.draw(); }
-    status.textContent = 'Hold to weave. Swipe to unravel. Release to reform.';
+    status.textContent = 'RESTORE / Original form restored. Drag slowly, then hold 3s to imprint.';
     field.resize();
   });
   window.addEventListener('keydown', event => {
@@ -106,11 +114,12 @@ if (field) {
     field.setMode(button.dataset.mode);
     camera.resetGestureInput();
     field.quality.recognitionPriority = false;
+    syncMemory();
     modeButtons.forEach(control => control.setAttribute('aria-pressed', control.dataset.mode === field.mode));
     const viewing = field.mode === 'VIEW';
     document.body.dataset.mode = field.mode;
     document.querySelectorAll('.form-button, #dispersion, #reset').forEach(control => { control.disabled = viewing; });
-    status.textContent = viewing ? 'VIEW / Drag to look around. Your form is held.' : 'SCULPT / Begin a new touch or hand gesture to continue.';
+    status.textContent = viewing ? 'VIEW / Drag to look around. Your form is held.' : 'SCULPT / Begin a new input. Drag slowly, then hold 3s to imprint.';
   }));
   field.onGestureRendered = sample => camera.metrics.rendered(sample);
   const debugMode = new URLSearchParams(location.search).get('debug');

@@ -26,6 +26,81 @@ function createField(t, { width = 390, context: providedContext } = {}) {
 
 const visiblePoints = field => Array.from(field.budget.indices.subarray(0, field.budget.length), index => field.points[index]);
 
+function slowSculpt(field, { hold = 3.2 } = {}) {
+  const start = visiblePoints(field).find(p => p.kind === 'surface');
+  field.pointerDown(91, start.x, start.y, 0);
+  assert.ok(field.memory.sessions.has(91));
+  for (let i = 1; i <= 5; i++) field.pointerMove(91, start.x + i * 5, start.y + i, i * 100);
+  for (let i = 0; i < Math.round(hold * 60); i++) field.update(1 / 60, 600 + i * 1000 / 60);
+  return field.memory.sessions.get(91);
+}
+
+test('slow mobile drag holds for 3s, commits without moving events and survives touch release', t => {
+  const field = createField(t), original = field.points.map(p => [...p.home]);
+  const session = slowSculpt(field);
+  assert.equal(field.memory.commits.length, 1);
+  const saved = JSON.stringify(field.memory.commits);
+  field.pointerUp(91); field.weave.clear();
+  for (let i = 0; i < 400; i++) field.update(1 / 60, 4000 + i * 1000 / 60);
+  assert.equal(JSON.stringify(field.memory.commits), saved);
+  const result = field.memory.deform(session.anchor, new Float64Array(3));
+  assert.ok(Math.hypot(...result.map((v, a) => v - session.anchor[a])) > 0.04);
+  assert.deepEqual(field.points.map(p => p.home), original);
+  assert.ok(field.points.every(p => p.target.every((v, a) => v === p.home[a])));
+});
+
+test('mobile pointercancel/lost capture cannot submit a pending imprint; completed memory survives cancel', t => {
+  const field = createField(t); slowSculpt(field, { hold: 2.8 });
+  field.pointerUp(91, true);
+  for (let i = 0; i < 240; i++) field.update(1 / 60, 4000 + i * 1000 / 60);
+  assert.equal(field.memory.commits.length, 0);
+  slowSculpt(field); field.pointerUp(91, true);
+  assert.equal(field.memory.commits.length, 1);
+});
+
+test('VIEW neither commits pending dwell nor modifies completed memory; new SCULPT drag is required', t => {
+  const field = createField(t); slowSculpt(field, { hold: 2.8 }); field.setMode('VIEW', 3500);
+  for (let i = 0; i < 50; i++) field.update(0.1, 3600 + i * 100);
+  assert.equal(field.memory.commits.length, 0);
+  field.setMode('SCULPT', 9000); field.pointerMove(91, 250, 400, 9100);
+  field.update(0.1, 9200); assert.equal(field.memory.commits.length, 0);
+  // Start a fresh stroke with timestamps after the boundary.
+  field.inputStartedAt = -Infinity; slowSculpt(field); field.pointerUp(91);
+  const memory = JSON.stringify(field.memory.commits); field.setMode('VIEW', 10000);
+  assert.equal(field.undoImprint(), false); assert.equal(field.reset(), false);
+  field.pointerDown(8, 100, 300, 10001); field.pointerMove(8, 200, 330, 10030);
+  for (let i = 0; i < 50; i++) field.update(0.1, 11000 + i * 100);
+  assert.equal(JSON.stringify(field.memory.commits), memory);
+});
+
+test('Undo and Restore clear the correct memory and cancel pending touch input', t => {
+  const field = createField(t); slowSculpt(field); field.pointerUp(91);
+  const first = JSON.stringify(field.memory.commits); slowSculpt(field); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 2);
+  assert.equal(field.undoImprint(), true); assert.equal(JSON.stringify(field.memory.commits), first);
+  slowSculpt(field, { hold: 2 }); field.reset();
+  assert.equal(field.memory.commits.length, 0); assert.equal(field.memory.sessions.size, 0);
+  assert.equal(field.pointers.size, 0); assert.equal(field.undoImprint(), false);
+});
+
+test('FLOW particles and woven skeleton project through the same bounded material field', t => {
+  const field = createField(t); slowSculpt(field); field.pointerUp(91); field.weave.clear();
+  for (let i = 0; i < 240; i++) field.update(1 / 60, 5000 + i * 1000 / 60);
+  const scratch = new Float64Array(3), screen = {};
+  let affectedFlow = false;
+  for (const p of visiblePoints(field)) {
+    const material = field.memory.deform(p.position, scratch);
+    if (p.flow && Math.hypot(...material.map((v, a) => v - p.position[a])) > 0.005) affectedFlow = true;
+    const drift = p.kind === 'interior' ? 0.009 : 0.001;
+    for (let a = 0; a < 3; a++) assert.ok(Math.abs(p.world[a] - (material[a] + p.driftSin[a] * drift)) < 1e-5);
+  }
+  assert.ok(affectedFlow, 'edge flow is carried by the remembered surface');
+  field.mesh.nodes.forEach((p, i) => {
+    field.project(field.memory.deform(p, scratch), screen);
+    assert.ok(Math.hypot(screen.x - field.nodeScreens[i].x, screen.y - field.nodeScreens[i].y) < 1e-8);
+  });
+});
+
 test('a fast swipe after a stationary hold tears locally and particles recover', t => {
   const field = createField(t);
   assert.equal(field.count, 595); assert.equal(field.dpr, 1.5);
