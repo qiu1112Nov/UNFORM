@@ -1,0 +1,149 @@
+// Local-only preparation contract. A later translator consumes getTranslationInput(),
+// never the original File. Coordinates refer to the bounded, orientation-corrected source.
+export const FUSION = Object.freeze({ maxBytes: 20 * 1024 * 1024, sourceSize: 2048, outputSize: 512, maxZoom: 3 });
+const types = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+export function validateImage(file) {
+  if (!file || !types.has(file.type)) throw new Error('Choose a JPEG, PNG or WebP image. Convert HEIC images to JPEG first.');
+  if (!file.size || file.size > FUSION.maxBytes) throw new Error('Choose an image smaller than 20 MB.');
+}
+export function cropRect(width, height, crop) {
+  const size = Math.min(width, height) / clamp(crop.zoom, 1, FUSION.maxZoom);
+  return { x: (width - size) * clamp(crop.x, 0, 1), y: (height - size) * clamp(crop.y, 0, 1), width: size, height: size };
+}
+export class FusionSession {
+  constructor() { this.revision = 0; this.source = null; this.output = null; this.loading = false; this.crop = { x: .5, y: .5, zoom: 1 }; }
+  async select(file, decode) {
+    const revision = ++this.revision;
+    this.loading = true;
+    // Keep the previous image on failure, but invalidate its old confirmation.
+    this.output = null;
+    try {
+      validateImage(file);
+      const source = await decode(file);
+      if (revision !== this.revision) { source.dispose?.(); return false; }
+      this.source?.dispose?.(); this.source = source;
+      this.crop = { x: .5, y: .5, zoom: 1 };
+      return true;
+    } finally { if (revision === this.revision) this.loading = false; }
+  }
+  adjust(patch) {
+    if (!this.source || this.loading) return false;
+    this.crop = { x: clamp(patch.x ?? this.crop.x, 0, 1), y: clamp(patch.y ?? this.crop.y, 0, 1), zoom: clamp(patch.zoom ?? this.crop.zoom, 1, FUSION.maxZoom) };
+    this.output = null; return true;
+  }
+  confirm(sample) {
+    if (!this.source || this.loading) return false;
+    const crop = cropRect(this.source.width, this.source.height, this.crop);
+    this.output = { version: 1, kind: 'LOCAL_IMAGE', width: FUSION.outputSize, height: FUSION.outputSize,
+      colorSpace: 'srgb', crop, pixels: sample(this.source, crop, FUSION.outputSize) };
+    return true;
+  }
+  getTranslationInput() { return this.output; }
+  clear() {
+    ++this.revision; this.source?.dispose?.(); this.source = null; this.output = null; this.loading = false;
+    this.crop = { x: .5, y: .5, zoom: 1 };
+  }
+}
+
+export async function decodeLocalImage(file) {
+  // Object URLs stay in the page; revoke on both success and error. Browsers
+  // apply EXIF orientation when drawing HTML images. No network upload occurs.
+  const url = URL.createObjectURL(file);
+  try {
+    const image = new Image(); image.src = url;
+    await image.decode();
+    const width = image.naturalWidth, height = image.naturalHeight;
+    if (!width || !height || width * height > 40_000_000) throw new Error('This image is too large. Choose an image under 40 megapixels.');
+    const ratio = Math.min(1, FUSION.sourceSize / Math.max(width, height));
+    const surface = document.createElement('canvas');
+    surface.width = Math.max(1, Math.round(width * ratio)); surface.height = Math.max(1, Math.round(height * ratio));
+    const ctx = surface.getContext('2d');
+    if (!ctx) throw new Error('Image editing requires Canvas 2D support.');
+    ctx.drawImage(image, 0, 0, surface.width, surface.height);
+    return { width: surface.width, height: surface.height, surface, dispose() { surface.width = surface.height = 0; } };
+  } finally { URL.revokeObjectURL(url); }
+}
+
+export function mountFusion({ flow, root }) {
+  const $ = selector => root.querySelector(selector);
+  const session = new FusionSession();
+  const input = $('#fusion-file'), preview = $('#fusion-preview'), confirmed = $('#translate-preview');
+  const message = $('#fusion-message');
+  let pointer = null, uiRevision = 0;
+  const controls = ['x', 'y', 'zoom'];
+  function sync() {
+    const ready = !!session.source && !session.loading;
+    $('#fusion-confirm').disabled = !ready;
+    $('#fusion-empty').hidden = !!session.source;
+    preview.hidden = !session.source;
+    for (const key of controls) {
+      const control = $(`#crop-${key}`); control.disabled = !ready;
+      control.value = session.crop[key];
+    }
+    if (session.source) {
+      const rect = cropRect(session.source.width, session.source.height, session.crop);
+      const ctx = preview.getContext('2d');
+      ctx.clearRect(0, 0, preview.width, preview.height);
+      ctx.drawImage(session.source.surface, rect.x, rect.y, rect.width, rect.height, 0, 0, preview.width, preview.height);
+    }
+  }
+  function clear() {
+    ++uiRevision; pointer = null;
+    session.clear(); input.value = ''; message.textContent = 'Your image stays in this tab. Nothing is uploaded.';
+    confirmed.getContext('2d').clearRect(0, 0, confirmed.width, confirmed.height);
+    sync();
+  }
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0]; input.value = '';
+    if (!file) return; // Dismissing the system picker keeps the current crop.
+    const revision = ++uiRevision;
+    pointer = null; message.textContent = 'Opening image locally…';
+    const pending = session.select(file, decodeLocalImage); sync();
+    try {
+      if (await pending && revision === uiRevision) message.textContent = 'Drag to frame your image. Adjust zoom or position below.';
+    } catch (error) { if (revision === uiRevision) message.textContent = error.message || 'Could not open this image. Please choose another.'; }
+    if (revision === uiRevision) sync();
+  });
+  for (const key of controls) $(`#crop-${key}`).addEventListener('input', event => {
+    session.adjust({ [key]: Number(event.target.value) }); sync();
+  });
+  preview.addEventListener('pointerdown', event => {
+    if (flow.screen !== 'IMPORT' || session.loading || !session.source || pointer || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    preview.setPointerCapture(event.pointerId);
+    pointer = { id: event.pointerId, x: event.clientX, y: event.clientY };
+  });
+  preview.addEventListener('pointermove', event => {
+    if (!pointer || pointer.id !== event.pointerId || !session.source) return;
+    const rect = cropRect(session.source.width, session.source.height, session.crop);
+    const scale = rect.width / preview.getBoundingClientRect().width;
+    session.adjust({ x: session.crop.x - (event.clientX - pointer.x) * scale / Math.max(1, session.source.width - rect.width),
+      y: session.crop.y - (event.clientY - pointer.y) * scale / Math.max(1, session.source.height - rect.height) });
+    pointer.x = event.clientX; pointer.y = event.clientY; sync();
+  });
+  const endPointer = event => { if (pointer?.id === event.pointerId) pointer = null; };
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture']) preview.addEventListener(name, endPointer);
+  $('#fusion-confirm').addEventListener('click', () => {
+    if (flow.screen !== 'IMPORT') return;
+    try {
+      const ready = session.confirm((source, rect, size) => {
+        confirmed.width = confirmed.height = size;
+        const ctx = confirmed.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(source.surface, rect.x, rect.y, rect.width, rect.height, 0, 0, size, size);
+        return ctx.getImageData(0, 0, size, size);
+      });
+      pointer = null;
+      if (flow.translate(ready)) $('#translate-title').focus({ preventScroll: true });
+    } catch { message.textContent = 'Could not prepare this image. Please choose another.'; }
+  });
+  $('#fusion-cancel').addEventListener('click', () => { clear(); flow.back(); $('#fusion-start').focus({ preventScroll: true }); });
+  $('#translate-cancel').addEventListener('click', () => { clear(); flow.back(); $('#fusion-start').focus({ preventScroll: true }); });
+  $('#translate-edit').addEventListener('click', () => { flow.editImage(); sync(); $('#fusion-title').focus({ preventScroll: true }); });
+  window.addEventListener('pagehide', () => {
+    clear();
+    if (flow.screen === 'IMPORT' || flow.screen === 'TRANSLATE') flow.back();
+  });
+  window.addEventListener('blur', () => { pointer = null; });
+  sync();
+  return { session, clear };
+}

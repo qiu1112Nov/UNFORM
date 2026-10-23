@@ -23,17 +23,57 @@
             <span id="geometry-description">Begin with a particle octahedron.<br />Sculpt through touch and movement.</span>
             <span class="origin-action" id="geometry-action">ENTER CREATE →</span>
           </button>
-          <div class="origin-option origin-unavailable" aria-disabled="true">
-            <span class="origin-option-top">02 / COMING NEXT</span>
+          <button id="fusion-start" type="button" class="origin-option" aria-describedby="fusion-description">
+            <span class="origin-option-top">02 / LOCAL IMAGE</span>
             <span class="origin-symbol" aria-hidden="true">⊞</span>
             <strong>FUSION</strong>
-            <span>Images becoming material.<br />A new way to begin.</span>
-            <span class="origin-action">Coming Next</span>
-          </div>
+            <span id="fusion-description">Begin with your own image.<br />Prepare a frame for translation.</span>
+            <span class="origin-action">IMPORT IMAGE →</span>
+          </button>
         </div>
         <p id="origin-draft" class="origin-draft" hidden>Your current form is kept in this tab. Resume with GEOMETRY.</p>
       </div>
       <footer class="origin-footer"><span>POINTS. LINES. POSSIBILITIES.</span><span>UNFORM / 4.0</span></footer>
+    </section>
+    <section id="fusion-screen" class="fusion-screen" hidden aria-labelledby="fusion-title">
+      <header class="origin-header"><span class="wordmark">UNFORM<span class="wordmark-dot">®</span></span><span>FUSION / 02</span></header>
+      <main class="fusion-content">
+        <p class="origin-kicker">AN IMAGE. A STARTING POINT.</p>
+        <h1 id="fusion-title" tabindex="-1">FRAME YOUR MATERIAL.</h1>
+        <p class="origin-description">Choose an image, then frame a square crop. Translation comes next.</p>
+        <div class="fusion-layout">
+          <div class="fusion-frame"><p id="fusion-empty">YOUR IMAGE BEGINS HERE</p><canvas id="fusion-preview" width="512" height="512" hidden aria-label="Square image crop preview. Drag to reposition, or use the position sliders below."></canvas><span class="crop-cross" aria-hidden="true">+</span></div>
+          <div class="fusion-tools">
+            <label class="fusion-file-button" for="fusion-file">CHOOSE / RESELECT IMAGE<input id="fusion-file" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+            <p class="fusion-note">JPEG · PNG · WEBP / UP TO 20 MB<br />HEIC: export as JPEG before choosing.</p>
+            <label for="crop-zoom">ZOOM<input id="crop-zoom" type="range" min="1" max="3" step="0.01" value="1" disabled /></label>
+            <label for="crop-x">HORIZONTAL POSITION<input id="crop-x" type="range" min="0" max="1" step="0.005" value="0.5" disabled /></label>
+            <label for="crop-y">VERTICAL POSITION<input id="crop-y" type="range" min="0" max="1" step="0.005" value="0.5" disabled /></label>
+            <p id="fusion-message" class="fusion-note" role="status" aria-live="polite">Your image stays in this tab. Nothing is uploaded.</p>
+            <button type="button" id="fusion-confirm" class="fusion-primary" disabled>CONFIRM IMAGE →</button>
+            <button type="button" id="fusion-cancel" class="fusion-secondary">CANCEL / BACK TO ORIGIN</button>
+          </div>
+        </div>
+      </main>
+      <footer class="origin-footer"><span>LOCAL PROCESSING ONLY</span><span>UNFORM / 4.0</span></footer>
+    </section>
+    <section id="translate-screen" class="fusion-screen" hidden aria-labelledby="translate-title">
+      <header class="origin-header"><span class="wordmark">UNFORM<span class="wordmark-dot">®</span></span><span>FUSION / TRANSLATE</span></header>
+      <main class="fusion-content">
+        <p class="origin-kicker">FRAME CONFIRMED / FUSION 1.0</p>
+        <h1 id="translate-title" tabindex="-1">TRANSLATE</h1>
+        <div class="fusion-layout">
+          <div class="fusion-frame"><canvas id="translate-preview" width="512" height="512" aria-label="Confirmed image crop"></canvas></div>
+          <div class="fusion-tools">
+            <p class="origin-description">Your image is prepared locally.</p>
+            <p class="fusion-note">Image sampling, particle mapping and structure generation are coming in a later phase. No particle translation has been generated.</p>
+            <p class="fusion-note">Your GEOMETRY artwork remains unchanged. This image is kept only in this tab and is cleared when you cancel.</p>
+            <button type="button" id="translate-edit" class="fusion-primary">EDIT FRAME</button>
+            <button type="button" id="translate-cancel" class="fusion-secondary">CANCEL / BACK TO ORIGIN</button>
+          </div>
+        </div>
+      </main>
+      <footer class="origin-footer"><span>LOCAL PROCESSING ONLY</span><span>UNFORM / 4.0</span></footer>
     </section>
     <canvas hidden id="particle-field" aria-label="Three-dimensional octahedron particle sculpture. Hold to weave local connections, swipe to break them. Alternative forms and motion controls are available below."></canvas>
     <div id="create-screen" class="interface" hidden>

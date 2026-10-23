@@ -24,9 +24,9 @@ test('first visit is ORIGIN without initializing CREATE; GEOMETRY shows CREATE b
   assert.equal(flow.choose('GEOMETRY'), false, 'a double tap cannot initialize twice');
 });
 
-test('FUSION and unknown origins cannot enter or initialize CREATE', () => {
+test('unknown origins cannot enter or initialize CREATE', () => {
   const { flow, events } = setup();
-  for (const path of ['FUSION', '', 'geometry', null]) assert.equal(flow.choose(path), false);
+  for (const path of ['', 'geometry', null]) assert.equal(flow.choose(path), false);
   assert.equal(flow.screen, 'ORIGIN'); assert.deepEqual(events, [['render', 'ORIGIN']]);
 });
 
@@ -46,4 +46,27 @@ test('clean return requires no dialog; reentry resumes instead of initializing a
   flow.choose('GEOMETRY'); flow.back(); flow.choose('GEOMETRY');
   assert.deepEqual(events.filter(e => e[0] === 'enter'), [['enter', true], ['enter', false]]);
   assert.equal(events.some(e => e[0] === 'confirm'), false);
+});
+
+
+test('FUSION opens IMPORT without initializing or modifying the GEOMETRY artwork', () => {
+  const { flow, events } = setup();
+  assert.equal(flow.choose('FUSION'), true);
+  assert.equal(flow.screen, 'IMPORT'); assert.equal(flow.started, false);
+  assert.equal(flow.choose('GEOMETRY'), false);
+  assert.deepEqual(events, [['render', 'ORIGIN'], ['render', 'IMPORT']]);
+  flow.back(); flow.choose('GEOMETRY'); flow.back(); flow.choose('FUSION'); flow.back(); flow.choose('GEOMETRY');
+  assert.deepEqual(events.filter(e => e[0] === 'enter'), [['enter', true], ['enter', false]]);
+});
+
+test('only a prepared IMPORT can enter TRANSLATE; edit and cancel never enter CREATE', () => {
+  const { flow, events } = setup();
+  assert.equal(flow.translate(true), false); assert.equal(flow.editImage(), false);
+  flow.choose('FUSION');
+  assert.equal(flow.translate(false), false); assert.equal(flow.screen, 'IMPORT');
+  assert.equal(flow.translate(true), true); assert.equal(flow.screen, 'TRANSLATE');
+  assert.equal(flow.translate(true), false); assert.equal(flow.choose('GEOMETRY'), false);
+  assert.equal(flow.editImage(), true); assert.equal(flow.screen, 'IMPORT');
+  flow.translate(true); assert.equal(flow.back(), true); assert.equal(flow.screen, 'ORIGIN');
+  assert.equal(events.some(e => ['enter', 'leave', 'confirm'].includes(e[0])), false);
 });

@@ -184,3 +184,33 @@ body[data-mode=VIEW] #particle-field:active { cursor: grabbing; }
   .mode-switch button { padding-inline: 9px; font-size: 9px; }
   .interaction-tools .text-button { font-size: 8px; letter-spacing: 1px; }
 }
+
+/* FUSION is a local preparation surface; CREATE keeps its existing layout. */
+.fusion-screen { height: 100dvh; overflow-y: auto; display: flex; flex-direction: column; padding: 0 6vw; }
+.fusion-content { flex: none; width: min(100%, 900px); margin: auto; padding: 28px 0; }
+.fusion-content h1 { font-size: clamp(26px, 4vw, 48px); outline: none; }
+.fusion-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, .8fr); gap: 32px; margin-top: 24px; }
+.fusion-frame { position: relative; width: 100%; aspect-ratio: 1; align-self: start; border: 1px solid var(--line); background: #080909; display: grid; place-items: center; overflow: hidden; }
+.fusion-frame canvas { display: block; width: 100%; height: 100%; object-fit: contain; }
+#fusion-preview { touch-action: none; cursor: grab; }
+#fusion-preview:active { cursor: grabbing; }
+#fusion-empty, .fusion-note, .fusion-tools > label, .fusion-primary, .fusion-secondary { font: 10px/1.7 'Courier New', monospace; letter-spacing: .7px; }
+#fusion-empty, .fusion-note { color: var(--muted); }
+.fusion-tools { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.fusion-tools input[type=range] { margin-top: 6px; min-height: 30px; }
+.fusion-file-button, .fusion-primary, .fusion-secondary { border: 1px solid #ffffff50; padding: 13px 14px; text-align: center; min-height: 44px; }
+.fusion-file-button { position: relative; cursor: pointer; }
+.fusion-file-button input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.fusion-file-button:focus-within { outline: 2px solid #eee; outline-offset: 4px; }
+.fusion-primary { background: #eeeeec; color: #101111; }
+.fusion-secondary { border-color: var(--line); }
+.fusion-note { margin: 0; overflow-wrap: anywhere; }
+.crop-cross { position: absolute; pointer-events: none; color: #ffffff80; font: 18px monospace; text-shadow: 0 0 2px #000; }
+body:not([data-screen=CREATE]) .gesture-debug { display: none; }
+@media(max-width:600px) {
+  .fusion-screen .origin-header { min-height: 64px; }
+  .fusion-content { padding: 20px 0; }
+  .fusion-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .fusion-frame { width: min(100%, 360px); margin-inline: auto; }
+  .fusion-tools { gap: 10px; }
+}

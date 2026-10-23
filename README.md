@@ -244,3 +244,11 @@ src/style.css      响应式黑白界面
 scripts/           本地 WASM 资源准备
 tests/             Node 内置测试，无需额外测试依赖
 ```
+
+### FUSION 1.0 — local image preparation
+
+ORIGIN → FUSION opens a local image picker for JPEG, PNG and WebP (up to 20 MB; decoded images up to 40 megapixels). HEIC is not supported in this phase: export it as JPEG first. Choose an image, drag the square preview or use the position/zoom sliders, then select **CONFIRM IMAGE** to enter **TRANSLATE**. **EDIT FRAME** returns to the same crop; choosing another image resets framing. Cancel clears the local image and returns to ORIGIN. Dismissing the native picker leaves the current image unchanged.
+
+This phase prepares a crop only. It does not generate particle translations or replace the GEOMETRY artwork. Images are decoded in the page, never uploaded, and are not persisted across refreshes. The working source is reduced to a maximum side of 2048 pixels; the confirmed crop is 512×512. Very large originals can still use memory during the browser's initial image decode.
+
+`src/fusion.js` separates preparation from future translation: `FusionSession.getTranslationInput()` returns `null` until confirmation, then a versioned `{ version, kind, width, height, colorSpace, crop, pixels }` contract (`pixels` is RGBA `ImageData` in the browser). Crop coordinates use the resized, orientation-corrected working source. A future sampler/mapper should consume that contract explicitly; it must not automatically enter CREATE or overwrite the existing shape. Adjustment/reselection invalidates the previous confirmation; cancellation also invalidates pending asynchronous image loads and releases the working canvas.

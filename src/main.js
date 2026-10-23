@@ -5,6 +5,7 @@ import { gestureLabel } from './gesture-pipeline.js';
 import { MOTION } from './motion.js';
 import { IMPRINT } from './imprint.js';
 import { OriginFlow } from './origin.js';
+import { mountFusion } from './fusion.js';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#particle-field');
@@ -183,10 +184,12 @@ const flow = new OriginFlow({
   render(screen) {
     const origin = screen === 'ORIGIN';
     $('#origin-screen').hidden = !origin;
-    $('#create-screen').hidden = origin;
-    canvas.hidden = origin;
+    $('#create-screen').hidden = screen !== 'CREATE';
+    canvas.hidden = screen !== 'CREATE';
+    $('#fusion-screen').hidden = screen !== 'IMPORT';
+    $('#translate-screen').hidden = screen !== 'TRANSLATE';
     document.body.dataset.screen = screen;
-    document.title = origin ? 'UNFORM 4.0 — ORIGIN' : 'UNFORM 4.0 — CREATE / GEOMETRY';
+    document.title = `UNFORM 4.0 — ${origin ? 'ORIGIN' : screen === 'CREATE' ? 'CREATE / GEOMETRY' : `FUSION / ${screen}`}`;
   },
   enter(first) {
     if (first) {
@@ -220,3 +223,8 @@ const flow = new OriginFlow({
 });
 $('#geometry-start').addEventListener('click', () => flow.choose('GEOMETRY'));
 document.querySelectorAll('[data-origin-back]').forEach(button => button.addEventListener('click', () => flow.back()));
+
+mountFusion({ flow, root: document });
+$('#fusion-start').addEventListener('click', () => {
+  if (flow.choose('FUSION')) $('#fusion-title').focus({ preventScroll: true });
+});
