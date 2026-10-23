@@ -1,7 +1,8 @@
 import { VERTICES, EDGES, FACES } from './octahedron.js';
 
-// A base owns connectivity, image embedding and its geometric envelope. Image
-// density/deformation knows only this contract. Other bases must supply their
+// A reference describes connectivity, an optional guide and an envelope. Image
+// materials can borrow a weak guide without rendering the reference or calling
+// its hard envelope. Other bases must supply their
 // own embedding/envelope; declaring a name alone never activates another shape.
 export function defineBaseTopology({ id, vertices, edges, faces, embedImage, constrain }) {
   if (!id || typeof embedImage !== 'function' || typeof constrain !== 'function') throw new Error('A base requires an image embedding and envelope.');

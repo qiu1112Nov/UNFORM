@@ -697,21 +697,33 @@ test('density topology and geometric glyphs draw with bounded mobile batched pat
   }
 });
 
-test('octahedral FUSION keeps every structural node at low quality and VIEW rotates without changing rest topology',async t=>{
+test('image-driven FUSION has no reserved reference nodes and VIEW rotates without changing the artwork',async t=>{
  const {TranslationJob}=await import('../src/image-translation.js');
  const {densityImage}=await import('./helpers/density-fixtures.js');
  const field=createField(t),m=await new TranslationJob().run(densityImage('corner'),{yieldTask:async()=>{}});
  field.switchArtwork('FUSION',m);
- assert.ok(field.points.slice(0,6).every(p=>p.layer===0));
+ assert.ok(field.points.every(p=>!p.pinned));assert.equal(field.budget.pinned.length,0);
  for(const count of [425,510,595,722,850]){
   field.setParticleCount(count);field.budget.advance(1);
   for(let i=0;i<field.poolCount;i++)if(field.points[i].pinned)assert.equal(field.budget.selected[i],1);
   field.draw();
  }
- const world=field.points.map(p=>[...p.world]),topology=JSON.stringify(field.mesh.baseTopology),firstX=field.points[0].x;
+ const world=field.points.map(p=>[...p.world]),topology=JSON.stringify(field.mesh.referenceTopology),firstX=field.points[0].x;
  const now=performance.now()+10;
  field.pointerDown(5,190,400,now);field.pointerMove(5,250,420,now+100);field.pointerUp(5);field.update(1/60,now+200);
  assert.notEqual(field.points[0].x,firstX);
- assert.deepEqual(field.points.map(p=>[...p.world]),world);assert.equal(JSON.stringify(field.mesh.baseTopology),topology);
+ assert.deepEqual(field.points.map(p=>[...p.world]),world);assert.equal(JSON.stringify(field.mesh.referenceTopology),topology);
  assert.equal(field.memory.commits.length,0);assert.ok(field.points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)));
+});
+
+test('reference lines are excluded from rendering even when weave charge would make them visible',async t=>{
+ const {TranslationJob}=await import('../src/image-translation.js');
+ const {densityImage}=await import('./helpers/density-fixtures.js');
+ let strokes=0;
+ const context=new Proxy({}, {get:(_,key)=>key==='stroke'?()=>{strokes++;}:()=>{}});
+ const field=createField(t,{width:1200,context});
+ const m=await new TranslationJob().run(densityImage('ring'),{yieldTask:async()=>{},count:1900});
+ field.switchArtwork('FUSION',m);strokes=0;field.drawWeave();assert.ok(strokes>0,'image-driven connections are drawn normally');
+ field.mesh.primary.fill(true);field.weave.charge.fill(1);strokes=0;field.drawWeave();
+ assert.equal(strokes,0,'reference edges are not faded lines: they are not submitted at all');
 });

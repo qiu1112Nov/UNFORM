@@ -596,6 +596,8 @@ export class ParticleField {
     const edgeActivation = this.form === 'octahedron' ? clamp(this.fragments.states[1].value) : this.impulse;
     if (this.mobile) this.weavePathSizes.fill(0);
     for (let i = 0; i < this.mesh.links.length; i++) {
+      // Reference edges never become display edges, even if a caller provides them.
+      if (density && this.mesh.primary?.[i]) continue;
       const [ia, ib] = this.mesh.links[i];
       const a = this.nodeScreens[ia], b = this.nodeScreens[ib];
       const strength = this.weave.strength(i);
@@ -603,7 +605,7 @@ export class ParticleField {
       const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
       const visibility = density ? Math.min(this.budget.opacity[ia], this.budget.opacity[ib]) : 1;
       if (visibility < .001) continue;
-      const base = this.mesh.boundary[i] ? (density ? (this.mesh.primary?.[i] ? .22 + this.mesh.linkWeights[i] * .10 : .08 + this.mesh.linkWeights[i] * .09) : .12) * intact * visibility : 0;
+      const base = this.mesh.boundary[i] ? (density ? (.08 + this.mesh.linkWeights[i] * .09) : .12) * intact * visibility : 0;
       if ((strength < 0.025 && base < 0.005) || integrity < 0.025) continue;
       if (this.mobile) {
         const opacity = (base + strength * 0.43 * visibility) * integrity;
@@ -627,7 +629,7 @@ export class ParticleField {
         const size = this.weavePathSizes[bucket]; if (!size) continue;
         const path = this.weavePaths[bucket];
         ctx.strokeStyle = `rgba(255,255,255,${((bucket % buckets) + 0.5) / buckets * 0.6})`;
-        ctx.setLineDash(bucket >= buckets ? [2, 3] : []); ctx.lineWidth = density && bucket % buckets >= 3 ? .75 : .55; ctx.beginPath();
+        ctx.setLineDash(bucket >= buckets ? [2, 3] : []); ctx.lineWidth = .55; ctx.beginPath();
         for (let segment = 0; segment < size * 4; segment += 4) { ctx.moveTo(path[segment], path[segment + 1]); ctx.lineTo(path[segment + 2], path[segment + 3]); }
         ctx.stroke();
       }

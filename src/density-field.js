@@ -1,10 +1,11 @@
-import { OCTAHEDRON_BASE, GEOMETRY_CONSTRAINT, createBaseScaffold } from './base-topology.js';
+import { OCTAHEDRON_BASE, GEOMETRY_CONSTRAINT } from './base-topology.js';
 
-// The base defines the global topology; image density supplies local structure.
+// Geometry is a reference only; visible nodes and topology come from the image.
 export const DENSITY_FIELD = Object.freeze({
   weights: Object.freeze({ silhouette: .55, contour: 1.4, contrast: .65, structure: .5, corner: .8, center: .15 }),
   mobile: Object.freeze({ lines: 720, faces: 14, glyphs: 24 }),
   desktop: Object.freeze({ lines: 1600, faces: 28, glyphs: 48 }),
+  referenceMix: .12, maxRadius: 1.55,
   degree: 4, candidates: 48, faceAreaRatio: .035, isolatedFraction: .12,
 });
 const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
@@ -124,17 +125,29 @@ export class DensityMaterial {
     if (count !== this.cachedCount || !this.cached) throw new Error('Prepare the density graph before entering CREATE.');
     return this.cached[index];
   }
-  deform(point, u, v, cell, edge = false) {
+  embed(u, v, depth, cell) {
+    const f=this.field, sx=(u-.5)*2, sy=(.5-v)*2;
+    // Continuous, feature-dependent thickness: no parallel slab faces, constant
+    // box extrusion, or equal-radius spherical shell. XY retains image silhouette.
+    const taper=.35+.65*Math.exp(-(sx*sx+sy*sy)*1.15);
+    const thickness=(.18+.24*f.foreground[cell]+.14*f.density[cell]+.08*f.coarse[cell])*taper;
+    const image=[sx*.94,sy*.94,depth*thickness+(f.coarse[cell]-this.features.mean)*.06];
+    const guide=this.base.embedImage(u,v,depth);
+    const blend=f.flat?0:DENSITY_FIELD.referenceMix*(.25+.75*f.coherence[cell]);
+    return image.map((value,a)=>value*(1-blend)+guide[a]*blend);
+  }
+  deform(point, u, v, cell) {
     const f=this.field, strength=f.flat?0:f.contour[cell], angle=f.tangent[cell];
     const cluster=Math.exp(-((u-f.centroid.x)**2+(v-f.centroid.y)**2)/.12);
     const offset=[Math.cos(angle)*strength*.028+(f.centroid.x-u)*cluster*.045,
       -Math.sin(angle)*strength*.028-(f.centroid.y-v)*cluster*.045,
       (f.coarse[cell]-this.features.mean)*.035];
-    const maximum=edge?GEOMETRY_CONSTRAINT.maxEdgeOffset:GEOMETRY_CONSTRAINT.maxOffset;
+    const maximum=GEOMETRY_CONSTRAINT.maxOffset;
     const magnitude=Math.hypot(...offset), scale=Math.min(1,maximum/(magnitude||1));
     const result=point.map((value,a)=>value+offset[a]*scale);
-    this.base.constrain(result);
-    // Envelope projection must not amplify the local displacement budget.
+    // A numerical safety radius, not an octahedral silhouette constraint.
+    const radius=Math.hypot(...result);
+    if(radius>DENSITY_FIELD.maxRadius)for(let a=0;a<3;a++)result[a]*=DENSITY_FIELD.maxRadius/radius;
     const shift=Math.hypot(...result.map((value,a)=>value-point[a]));
     if(shift>maximum)for(let a=0;a<3;a++)result[a]=point[a]+(result[a]-point[a])*maximum/shift;
     return result;
@@ -143,17 +156,8 @@ export class DensityMaterial {
     const f = this.field, n = f.resolution, samples = new Array(count), occupancy = new Uint16Array(n * n);
     const active = f.density.reduce((s, v) => s + (v > .05), 0), cellLimit = Math.max(3, Math.ceil(count / Math.max(1, active) * 2.5));
     const limits = count <= 850 ? DENSITY_FIELD.mobile : DENSITY_FIELD.desktop;
-    const scaffold=createBaseScaffold(this.base);
-    if(count<scaffold.count)throw new Error('Particle budget cannot hold the base topology.');
-    for(let i=0;i<scaffold.count;i++){
-      const rest=scaffold.points[i], u=(rest[0]+1)/2, v=(1-rest[1])/2;
-      const cell=Math.min(n-1,Math.floor(v*n))*n+Math.min(n-1,Math.floor(u*n));
-      const point=i<this.base.vertices.length?[...rest]:this.deform(rest,u,v,cell,true);
-      samples[i]={point,canonical:rest,density:f.density[cell],cell,uv:[u,v],kind:'edge',glyph:'point',
-        tangent:-f.tangent[cell],coherence:f.flat?0:f.coherence[cell],corner:f.flat?0:f.corner[cell],pinned:true,baseVertex:i<this.base.vertices.length};
-    }
     let glyphs = 0;
-    for (let i = scaffold.count; i < count; i++) {
+    for (let i = 0; i < count; i++) {
       check(signal);
       const cdf = i % 4 === 0 ? f.contourCDF : f.cdf;
       let cell = 0;
@@ -164,8 +168,8 @@ export class DensityMaterial {
       const edge = f.flat ? 0 : f.contour[cell], important = f.flat ? 0 : f.corner[cell], coherent = f.flat ? 0 : f.coherence[cell];
       const interior = random(i, 21) < .2;
       const side = random(i, 25) < .5 ? -1 : 1;
-      const depth=interior?(random(i,27)*2-1)*.7:side*(.88+.12*random(i,29));
-      const canonical=this.base.embedImage(u,v,depth);
+      const depth=interior?(random(i,27)*2-1)*.7:side*(.45+.55*random(i,29));
+      const canonical=this.embed(u,v,depth,cell);
       const point=this.deform(canonical,u,v,cell);
       const angle=f.tangent[cell];
       let glyph = 'point';
@@ -179,32 +183,27 @@ export class DensityMaterial {
       if (i % 64 === 63 || i === count - 1) { progress('STRUCTURE', .8 + .12 * (i + 1) / count); await yieldTask(); }
     }
     this.cached = samples; this.cachedCount = count;
-    this.mesh = await buildTopology(samples, limits, { signal, yieldTask, progress, scaffold });
+    this.mesh = await buildTopology(samples, limits, { signal, yieldTask, progress, reference:this.base, field:f });
     check(signal); this.stats = this.mesh.stats;
     return this;
   }
   createFlow(index) {
-    if (index % 8 !== 0 || this.cached[index].pinned || this.cached[index].kind !== 'edge') return null;
+    if (index % 8 !== 0 || this.cached[index].kind !== 'edge') return null;
     const neighbors = this.mesh.adjacency[index]; if (!neighbors.length) return null;
     const a = this.mesh.nodes[index], b = this.mesh.nodes[neighbors[index % neighbors.length]];
     return { graph: true, a, b, phase: 0, angularSpeed: .12 * (.6 + random(index, 81)), position: new Float32Array(a), materialPosition: new Float64Array(a) };
   }
 }
 
-export async function buildTopology(samples, limits, { signal, yieldTask = wait, progress = () => {}, scaffold = null } = {}) {
+export async function buildTopology(samples, limits, { signal, yieldTask = wait, progress = () => {}, reference = null, field = null } = {}) {
   const nodes = samples.map(p => p.point), adjacency = nodes.map(() => []), links = [], linkWeights = [], triangles = [], faceWeights = [];
   const cells = new Map(), size = .16, key = (x, y, z) => `${x},${y},${z}`;
   nodes.forEach((p, i) => { const k = key(...p.map(v => Math.floor(v / size))); if (!cells.has(k)) cells.set(k, []); cells.get(k).push(i); });
   const pairs = new Set(), incident = new Int32Array(nodes.length).fill(-1), primary=[];
   let checked = 0, totalLength = 0;
-  for(const [a,b]of scaffold?.links??[]){
-    pairs.add(`${Math.min(a,b)},${Math.max(a,b)}`);incident[a]=incident[b]=links.length;
-    links.push([a,b]);linkWeights.push(.65+.35*Math.max(samples[a].density,samples[b].density));primary.push(true);adjacency[a].push(b);adjacency[b].push(a);
-    totalLength+=Math.hypot(...nodes[a].map((v,d)=>v-nodes[b][d]));
-  }
   for (let i = 0; i < nodes.length && links.length < limits.lines; i++) {
     check(signal);
-    if (!samples[i].pinned && random(i, 97) < DENSITY_FIELD.isolatedFraction) continue;
+    if (random(i, 97) < DENSITY_FIELD.isolatedFraction) continue;
     const a = nodes[i], p = samples[i], [x, y, z] = a.map(v => Math.floor(v / size)), candidates = [];
     let scanned = 0;
     search: for (const [dx,dy,dz] of NEIGHBORS) {
@@ -214,8 +213,14 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
         if (scanned++ >= DENSITY_FIELD.candidates) break search;
         checked++;
         const j = bucket[(slot + offset) % bucket.length];
-        if (j === i || !samples[j].pinned && random(j, 97) < DENSITY_FIELD.isolatedFraction || adjacency[j].length >= DENSITY_FIELD.degree) continue;
-        const b = nodes[j], q = samples[j], vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2], d = Math.hypot(vx, vy, vz);
+        if (j === i || random(j, 97) < DENSITY_FIELD.isolatedFraction || adjacency[j].length >= DENSITY_FIELD.degree) continue;
+        const q = samples[j];
+        if(field && p.uv && q.uv){
+          const u=(p.uv[0]+q.uv[0])/2,v=(p.uv[1]+q.uv[1])/2,n=field.resolution;
+          const middle=field.density[Math.min(n-1,Math.floor(v*n))*n+Math.min(n-1,Math.floor(u*n))];
+          if(middle<Math.max(.008,Math.min(p.density,q.density)*.1))continue;
+        }
+        const b = nodes[j], vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2], d = Math.hypot(vx, vy, vz);
         const radius = .11 + (1 - Math.min(p.density, q.density)) * .12;
         if (d < .018 || d > radius || Math.abs(vz) > .13) continue;
         const alignment = Math.abs((vx * Math.cos(p.tangent) + vy * Math.sin(p.tangent)) / d);
@@ -256,8 +261,8 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
   }
   progress('TOPOLOGY READY', .99);
   return { nodes, links, adjacency, triangles, boundary: links.map(() => true), linkWeights, faceWeights, incident,
-    primary, baseTopology:scaffold?{ id:scaffold.base.id,vertices:scaffold.base.vertices.map((_,i)=>i),edges:scaffold.paths,faces:scaffold.base.faces }:null,
+    primary, referenceTopology:reference,
     step: totalLength / Math.max(1, links.length), stats: { nodes: nodes.length, lines: links.length, faces: triangles.length,
-      baseVertices:scaffold?.base.vertices.length??0,baseEdges:scaffold?.paths.length??0,baseFaces:scaffold?.base.faces.length??0,
+      referenceVertices:reference?.vertices.length??0,referenceEdges:reference?.edges.length??0,referenceFaces:reference?.faces.length??0,
       isolated: adjacency.filter(a => !a.length).length, areaRatio: areaSum / Math.max(1e-8, footprint), candidateChecks: checked } };
 }
