@@ -8,19 +8,20 @@ import { densityImage } from './helpers/density-fixtures.js';
 const fast = { yieldTask: async () => {} };
 const make = (name, options = {}) => new TranslationJob().run(densityImage(name), { ...fast, ...options });
 
-test('ring retains its hole and silhouette rather than collapsing to an octahedron', async () => {
+test('ring retains its density hole inside the mandatory geometric scaffold', async () => {
   const m = await make('ring');
-  const ring = m.cached.filter(p => { const r = Math.hypot(p.point[0], p.point[1]); return r > .36 && r < .76; }).length;
-  assert.ok(ring / m.cached.length > .9);
-  assert.ok(m.cached.filter(p => Math.hypot(p.point[0], p.point[1]) < .3).length < 20);
-  assert.ok(m.field.density[32 * 64 + 32] < .001);
+  const image = m.cached.filter(p=>!p.pinned);
+  const ring = image.filter(p=>{const r=Math.hypot((p.uv[0]-.5)*2,(p.uv[1]-.5)*2);return r>.36&&r<.76;}).length;
+  assert.ok(ring/image.length>.9);
+  assert.ok(image.filter(p=>Math.hypot(p.point[0],p.point[1])<.25).length<20);
+  assert.ok(m.field.density[32*64+32]<.001);
   const min = Math.min(...m.cached.map(p => p.point[2])), max = Math.max(...m.cached.map(p => p.point[2]));
   assert.ok(max - min > .4, 'volume has front and back depth');
 });
 
-test('vertical and horizontal subjects produce distinctly oriented volumes, not one fixed support', async () => {
+test('horizontal and vertical density patterns remain distinct inside the same base topology', async () => {
   const [vertical, horizontal] = await Promise.all([make('vertical'), make('horizontal')]);
-  const variance = m => [0,1].map(a => m.cached.reduce((s,p) => s+p.point[a]**2,0)/m.cached.length);
+  const variance = m => [0,1].map(a => m.cached.filter(p=>!p.pinned).reduce((s,p) => s+p.point[a]**2,0)/m.cached.filter(p=>!p.pinned).length);
   const [vx,vy] = variance(vertical), [hx,hy] = variance(horizontal);
   assert.ok(vy > vx * 6); assert.ok(hx > hy * 6);
   assert.notDeepEqual(vertical.mesh.links, horizontal.mesh.links);
@@ -28,8 +29,8 @@ test('vertical and horizontal subjects produce distinctly oriented volumes, not 
 
 test('separated subjects preserve negative space and do not receive bridging lines', async () => {
   const m = await make('clusters');
-  assert.ok(m.cached.filter(p => Math.abs(p.point[0]) < .15).length < 45);
-  for (const [i,j] of m.mesh.links) assert.ok(Math.abs(m.cached[i].point[0] - m.cached[j].point[0]) < .24);
+  assert.ok(m.cached.filter(p => !p.pinned && Math.abs(p.point[0]) < .10).length < 45);
+  for (let link=0;link<m.mesh.links.length;link++){if(m.mesh.primary[link])continue;const [i,j]=m.mesh.links[link];assert.ok(Math.abs(m.cached[i].point[0]-m.cached[j].point[0])<.24);}
 });
 
 test('points, lines, facets and geometric glyphs share the same spatial node identities', async () => {
@@ -73,7 +74,8 @@ test('high density alone cannot create a solid mesh; low contrast and texture-on
 
 test('transparent background is sparse while the opaque silhouette stays represented', async () => {
   const m=await make('transparent');
-  assert.ok(m.cached.filter(p=>Math.hypot(p.point[0],p.point[1])<.65).length/m.cached.length>.95);
+  const image=m.cached.filter(p=>!p.pinned);
+  assert.ok(image.filter(p=>Math.hypot((p.uv[0]-.5)*2,(p.uv[1]-.5)*2)<.65).length/image.length>.95);
   await assert.rejects(make('empty'),/transparent/);
 });
 
@@ -85,7 +87,7 @@ test('adjustable density weights change the field and default weights are not mu
 
 test('regeneration varies placement, preserves silhouette, and a cancelled topology cannot publish', async () => {
   const job=new TranslationJob(), a=await job.run(densityImage('ring'),fast), b=await job.run(densityImage('ring'),fast);
-  assert.notDeepEqual(a.cached[0].point,b.cached[0].point);assert.equal(a.cached.length,b.cached.length);
+  assert.notDeepEqual(a.cached.find(p=>!p.pinned).point,b.cached.find(p=>!p.pinned).point);assert.equal(a.cached.length,b.cached.length);
   await assert.rejects(job.run(densityImage('corner'),{...fast,progress(phase){if(phase==='CONNECTIONS')job.cancel();}}),{name:'AbortError'});
   assert.equal(job.result,null);
 });
@@ -98,6 +100,7 @@ test('adaptive particle budgets handle variable image-driven categories without 
   for(const count of [425,850,510,595]){
     budget.setCount(count);budget.advance(1);
     assert.equal(budget.selected.reduce((a,b)=>a+b),count);assert.equal(budget.length,count);
+    for(let i=0;i<points.length;i++)if(points[i].pinned)assert.equal(budget.selected[i],1);
     assert.ok([...budget.indices.subarray(0,budget.length)].every(i=>i<850));
   }
 });
@@ -118,8 +121,9 @@ test('FLOW follows an actual graph edge, reuses its buffer, and cannot restore a
 test('dark subjects on bright backgrounds attract density instead of weighting the empty bright backdrop', async () => {
   const m=await make('inverted');
   assert.ok(Math.abs(m.field.centroid.x-.23)<.04);assert.ok(Math.abs(m.field.centroid.y-.33)<.04);
-  const near=m.cached.filter(p=>Math.hypot(p.uv[0]-.23,p.uv[1]-.33)<.2).length;
-  assert.ok(near/m.cached.length>.95);
+  const image=m.cached.filter(p=>!p.pinned);
+  const near=image.filter(p=>Math.hypot(p.uv[0]-.23,p.uv[1]-.33)<.2).length;
+  assert.ok(near/image.length>.95);
 });
 
 test('a concentrated subject cannot turn spatial hashing into an unbounded all-pairs scan', async () => {

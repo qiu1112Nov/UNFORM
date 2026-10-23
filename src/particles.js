@@ -66,8 +66,8 @@ export class ParticleField {
       const flow = material?.densityField ? material.createFlow(i) : createEdgeFlow(i, this.poolCount, sample.canonical ?? sample.point);
       if (flow && material) flow.materialPosition = new Float64Array(sample.point);
       return {
-        kind: sample.kind, density: material?.densityField ? sample.density : undefined, glyph: sample.glyph ?? 'point', home: sample.point, position: [...sample.point], target: [...sample.point],
-        layer: material?.densityField ? (sample.kind === 'interior' ? 2 : sample.corner > .35 ? 0 : 1) : fragmentLayer(sample.kind, sample.canonical ?? sample.point), flow,
+        kind: sample.kind, pinned: !!sample.pinned, density: material?.densityField ? sample.density : undefined, glyph: sample.glyph ?? 'point', home: sample.point, position: [...sample.point], target: [...sample.point],
+        layer: material?.densityField ? (sample.kind === 'interior' ? 2 : sample.baseVertex || sample.corner > .35 ? 0 : 1) : fragmentLayer(sample.kind, sample.canonical ?? sample.point), flow,
         world: new Float32Array(sample.point), traceSlot: -1, traceWeight: 0,
         motion: sample.point.map(value => ({ value, velocity: 0 })),
         deformation: { value: 0, velocity: 0 },
@@ -603,7 +603,7 @@ export class ParticleField {
       const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
       const visibility = density ? Math.min(this.budget.opacity[ia], this.budget.opacity[ib]) : 1;
       if (visibility < .001) continue;
-      const base = this.mesh.boundary[i] ? (density ? .08 + this.mesh.linkWeights[i] * .09 : .12) * intact * visibility : 0;
+      const base = this.mesh.boundary[i] ? (density ? (this.mesh.primary?.[i] ? .22 + this.mesh.linkWeights[i] * .10 : .08 + this.mesh.linkWeights[i] * .09) : .12) * intact * visibility : 0;
       if ((strength < 0.025 && base < 0.005) || integrity < 0.025) continue;
       if (this.mobile) {
         const opacity = (base + strength * 0.43 * visibility) * integrity;
@@ -627,7 +627,7 @@ export class ParticleField {
         const size = this.weavePathSizes[bucket]; if (!size) continue;
         const path = this.weavePaths[bucket];
         ctx.strokeStyle = `rgba(255,255,255,${((bucket % buckets) + 0.5) / buckets * 0.6})`;
-        ctx.setLineDash(bucket >= buckets ? [2, 3] : []); ctx.lineWidth = 0.55; ctx.beginPath();
+        ctx.setLineDash(bucket >= buckets ? [2, 3] : []); ctx.lineWidth = density && bucket % buckets >= 3 ? .75 : .55; ctx.beginPath();
         for (let segment = 0; segment < size * 4; segment += 4) { ctx.moveTo(path[segment], path[segment + 1]); ctx.lineTo(path[segment + 2], path[segment + 3]); }
         ctx.stroke();
       }

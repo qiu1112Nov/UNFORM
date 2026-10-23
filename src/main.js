@@ -55,7 +55,7 @@ if (field) {
       const active = button.dataset.form === form;
       button.classList.toggle('active', active); button.setAttribute('aria-pressed', active);
     });
-    $('#form-caption').textContent = form === 'octahedron' && field.material?.densityField ? `${field.poolCount} IMAGE NODES / DENSITY FIELD` : captions[form];
+    $('#form-caption').textContent = form === 'octahedron' && field.material?.densityField ? `${field.poolCount} NODES / OCTAHEDRON BASE` : captions[form];
     if (field.paused) { field.update(1); field.draw(); }
   };
   document.querySelectorAll('.form-button').forEach(button => button.addEventListener('click', () => setForm(button.dataset.form)));
@@ -215,12 +215,12 @@ const flow = new OriginFlow({
       document.querySelectorAll('.form-button, #dispersion, #reset').forEach(control => { control.disabled = field.mode === 'VIEW'; });
       $('#undo').disabled = field.mode !== 'SCULPT' || !field.memory.commits.length;
       $('#dispersion').value = Math.round(field.dispersion * 100); $('#dispersion-value').value = `${Math.round(field.dispersion * 100)}%`;
-      $('#form-caption').textContent = field.form === 'octahedron' ? (field.material?.densityField ? `${field.poolCount} IMAGE NODES / DENSITY FIELD` : '06 VERTICES / 12 EDGES / 08 FACES') : field.form.toUpperCase();
-      document.querySelector('[data-form=octahedron]').innerHTML = `<span aria-hidden="true">◇</span> ${path === 'FUSION' ? 'Field' : 'Octa'}`;
+      $('#form-caption').textContent = field.form === 'octahedron' ? (field.material?.densityField ? `${field.poolCount} NODES / OCTAHEDRON BASE` : '06 VERTICES / 12 EDGES / 08 FACES') : field.form.toUpperCase();
+      document.querySelector('[data-form=octahedron]').innerHTML = `<span aria-hidden="true">◇</span> ${field.material?.base?.id === 'octahedron' || path === 'GEOMETRY' ? 'Octa' : 'Field'}`;
       $('#pause').setAttribute('aria-label', field.paused ? 'Play animation' : 'Pause animation');
       $('#pause').setAttribute('aria-pressed', field.paused);
       $('.masthead-caption').innerHTML = `SCULPTURES IN MOTION<br />CREATE / ${path}`;
-      $('.eyebrow').textContent = `CREATE / ${path} — ${path === 'FUSION' ? 'DENSITY FIELD / 003' : 'OCTAHEDRON / 001'}`;
+      $('.eyebrow').textContent = `CREATE / ${path} — ${path === 'FUSION' ? 'OCTA × DENSITY FIELD' : 'OCTAHEDRON / 001'}`;
       document.title = `UNFORM 4.0 — CREATE / ${path}`;
       status.textContent = field.mode === 'VIEW' ? 'VIEW / Drag to observe; switch to SCULPT to shape.' : 'SCULPT / Begin a new touch. Slow drag to imprint; swipe to scatter.';
       $('#fusion-resume').hidden = path !== 'FUSION' && !field.artworks.has('FUSION');

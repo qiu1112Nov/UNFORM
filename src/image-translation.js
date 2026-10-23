@@ -120,7 +120,7 @@ export class TranslationJob {
     if (!Number.isInteger(count) || count < 128 || count > 1900) throw new Error('Unsupported particle budget.');
     const task = { ...options, signal: controller.signal };
     const field = await buildDensityField(features, task);
-    const material = new DensityMaterial(features, field, revision);
+    const material = new DensityMaterial(features, field, revision, options.base);
     await material.prepare(count, task); abort(controller.signal);
     if (revision !== this.revision) return null;
     this.result = material; options.progress?.('READY', 1); return material;
