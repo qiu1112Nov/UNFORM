@@ -1,61 +1,84 @@
 import { springCoefficients, advanceSpring } from './motion.js';
 
-// Object-space material field shared by particles, FLOW and the woven skeleton.
-export const IMPRINT = Object.freeze({ dwellSeconds: 3, stablePixels: 6, minDragPixels: 10,
-  maxSlowSpeed: 180, radius: 0.55, retention: 0.6, maxDrag: 0.32, maxOffset: 0.24,
-  maxCommits: 24, maxSessions: 4 });
+// CSS-pixel thresholds are independent of mobile particle count and canvas DPR.
+export const IMPRINT = Object.freeze({ pauseSeconds: 0.55, pulseSeconds: 0.45, stablePixels: 4,
+  minDragPixels: 8, minDeformationPixels: 3, radius: 0.55, retention: 0.6,
+  maxDrag: 0.32, maxOffset: 0.24, maxCommits: 24, maxSessions: 4, maxReleaseTails: 24 });
 
 export class ShapeMemory {
   constructor() { this.commits = []; this.sessions = new Map(); this.result = new Float64Array(3); }
-  begin(id, anchor, x, y, now) {
-    if (this.sessions.size >= IMPRINT.maxSessions) return;
+  begin(id, anchor, x, y, now, pixelScale = 100) {
+    if (this.sessions.get(id)?.active) return;
+    let active = 0, quietestKey, quietest = Infinity;
+    for (const [key, session] of this.sessions) {
+      if (session.active) active++;
+      else {
+        const magnitude = session.motion.reduce((sum, m) => sum + m.value ** 2, 0);
+        if (magnitude < quietest) { quietest = magnitude; quietestKey = key; }
+      }
+    }
+    if (active >= IMPRINT.maxSessions) return;
+    // Release springs must not occupy the slots for new active strokes.
+    if (this.sessions.size >= IMPRINT.maxSessions + IMPRINT.maxReleaseTails) this.sessions.delete(quietestKey);
+    const previous = this.sessions.get(id);
+    if (previous) { this.sessions.delete(id); this.sessions.set(Symbol('release'), previous); }
     this.sessions.set(id, { anchor: [...anchor], x, y, startX: x, startY: y, stableX: x, stableY: y,
-      time: now, dwell: 0, slow: false, slowTravel: 0, active: true, committed: false, stage: 'ELASTIC',
-      goal: new Float64Array(3), retained: new Float64Array(3),
+      time: now, pixelScale, dwell: 0, active: true, blocked: false, committed: false, stage: 'ELASTIC',
+      hinted: false, pulseAge: Infinity, goal: new Float64Array(3),
       motion: Array.from({ length: 3 }, () => ({ value: 0, velocity: 0 })) });
   }
   move(id, x, y, now, offset) {
     const s = this.sessions.get(id); if (!s?.active) return;
-    const distance = Math.hypot(x - s.x, y - s.y);
-    if (distance > 0.5) {
-      // Idle time before a swipe must not make that swipe appear slow.
-      const speed = distance / Math.max(0.008, Math.min(0.1, (now - s.time) / 1000));
-      s.slowTravel = speed <= IMPRINT.maxSlowSpeed ? s.slowTravel + distance : 0;
-      s.slow = s.slowTravel >= IMPRINT.minDragPixels;
-      if (!s.slow) s.dwell = 0;
-    }
     if (Math.hypot(x - s.stableX, y - s.stableY) > IMPRINT.stablePixels) {
-      s.dwell = 0; s.stableX = x; s.stableY = y;
+      s.dwell = 0; s.hinted = false; s.pulseAge = Infinity; s.stage = 'ELASTIC';
+      s.stableX = x; s.stableY = y;
     }
     s.x = x; s.y = y; s.time = now;
     const length = Math.hypot(...offset), scale = Math.min(1, IMPRINT.maxDrag / (length || 1));
     for (let a = 0; a < 3; a++) s.goal[a] = offset[a] * scale;
   }
-  end(id) { const s = this.sessions.get(id); if (s) { s.active = false; s.dwell = 0; } }
+  effective(s) {
+    return !s.blocked && Math.hypot(s.x - s.startX, s.y - s.startY) >= IMPRINT.minDragPixels &&
+      Math.hypot(...s.goal) * IMPRINT.retention * s.pixelScale >= IMPRINT.minDeformationPixels;
+  }
+  // Only a normal pointer release may commit. Never called by hand inference.
+  end(id, commit = false) {
+    const s = this.sessions.get(id); if (!s?.active) return false;
+    s.active = false; s.dwell = 0; s.pulseAge = Infinity;
+    if (!commit || !this.effective(s)) return false;
+    if (this.commits.length >= IMPRINT.maxCommits) { s.stage = 'LIMIT'; return false; }
+    const offset = Array.from(s.goal, value => value * IMPRINT.retention);
+    this.commits.push({ anchor: [...s.anchor], offset });
+    // Preserve the exact live sum and velocity, even if release precedes the next
+    // animation frame. The residual spring settles around the new material rest.
+    for (let a = 0; a < 3; a++) s.motion[a].value -= offset[a];
+    s.committed = true; s.stage = 'COMMIT';
+    return true;
+  }
+  blockActive() {
+    // A stroke that ever joined multitouch stays ineligible until all fingers lift.
+    for (const s of this.sessions.values()) if (s.active) {
+      s.blocked = true; s.dwell = 0; s.pulseAge = Infinity;
+    }
+  }
   cancelAll() { for (const id of this.sessions.keys()) this.end(id); }
-  update(dt, inertia, allowCommit) {
+  update(dt, inertia, allowFeedback) {
     const coefficients = springCoefficients(dt, inertia, 1.3);
-    let committed = false;
     for (const [id, s] of this.sessions) {
       let speedSquared = 0, magnitudeSquared = 0;
       for (let a = 0; a < 3; a++) {
-        advanceSpring(s.motion[a], s.active ? s.goal[a] - s.retained[a] : 0, coefficients);
+        advanceSpring(s.motion[a], s.active ? s.goal[a] : 0, coefficients);
         speedSquared += s.motion[a].velocity ** 2; magnitudeSquared += s.motion[a].value ** 2;
       }
-      const eligible = allowCommit && s.active && !s.committed && s.slow &&
-        Math.hypot(s.x - s.startX, s.y - s.startY) >= IMPRINT.minDragPixels;
+      s.pulseAge += dt;
+      const eligible = allowFeedback && s.active && this.effective(s);
       s.dwell = eligible ? s.dwell + dt : 0;
-      if (s.dwell >= IMPRINT.dwellSeconds && speedSquared < 0.0004 && this.commits.length < IMPRINT.maxCommits) {
-        s.stage = 'IMPRINT';
-        const offset = s.motion.map(m => m.value * IMPRINT.retention);
-        this.commits.push({ anchor: [...s.anchor], offset });
-        // Transfer displacement between layers, retaining the exact visible sum.
-        for (let a = 0; a < 3; a++) { s.retained[a] += offset[a]; s.motion[a].value -= offset[a]; }
-        s.committed = true; s.stage = 'COMMIT'; committed = true;
+      if (!allowFeedback) s.pulseAge = Infinity;
+      if (s.dwell >= IMPRINT.pauseSeconds && !s.hinted) {
+        s.hinted = true; s.pulseAge = 0; s.stage = 'PAUSE';
       }
       if (!s.active && magnitudeSquared < 1e-10 && speedSquared < 1e-8) this.sessions.delete(id);
     }
-    return committed;
   }
   deform(point, destination) {
     if (!this.commits.length && !this.sessions.size) {

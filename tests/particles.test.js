@@ -26,7 +26,7 @@ function createField(t, { width = 390, context: providedContext } = {}) {
 
 const visiblePoints = field => Array.from(field.budget.indices.subarray(0, field.budget.length), index => field.points[index]);
 
-function slowSculpt(field, { hold = 3.2 } = {}) {
+function sculptDrag(field, { hold = 0.1 } = {}) {
   const start = visiblePoints(field).find(p => p.kind === 'surface');
   field.pointerDown(91, start.x, start.y, 0);
   assert.ok(field.memory.sessions.has(91));
@@ -35,12 +35,13 @@ function slowSculpt(field, { hold = 3.2 } = {}) {
   return field.memory.sessions.get(91);
 }
 
-test('slow mobile drag holds for 3s, commits without moving events and survives touch release', t => {
+test('mobile drag commits on release without a pause and survives elastic recovery', t => {
   const field = createField(t), original = field.points.map(p => [...p.home]);
-  const session = slowSculpt(field);
+  const session = sculptDrag(field);
+  assert.equal(field.memory.commits.length, 0);
+  field.pointerUp(91); field.weave.clear();
   assert.equal(field.memory.commits.length, 1);
   const saved = JSON.stringify(field.memory.commits);
-  field.pointerUp(91); field.weave.clear();
   for (let i = 0; i < 400; i++) field.update(1 / 60, 4000 + i * 1000 / 60);
   assert.equal(JSON.stringify(field.memory.commits), saved);
   const result = field.memory.deform(session.anchor, new Float64Array(3));
@@ -49,23 +50,72 @@ test('slow mobile drag holds for 3s, commits without moving events and survives 
   assert.ok(field.points.every(p => p.target.every((v, a) => v === p.home[a])));
 });
 
+test('release before the next animation frame still remembers effective mobile shaping', t => {
+  const field = createField(t); sculptDrag(field, { hold: 0 });
+  assert.equal(field.memory.commits.length, 0); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 1);
+  for (let i = 0; i < 240; i++) field.update(1 / 60);
+  assert.equal(field.memory.commits.length, 1);
+  assert.ok(field.memory.commits[0].offset.some(v => Math.abs(v) > 0.03));
+});
+
+test('pause feedback draws one sparse ring, expires, and cannot save while held', t => {
+  let rings = 0;
+  const context = new Proxy({}, { get: (_, key) => key === 'arc'
+    ? (x, y, radius) => { if (radius >= 12 && radius <= 24) rings++; } : () => {} });
+  const field = createField(t, { context }); sculptDrag(field, { hold: 0.6 });
+  rings = 0; field.draw(); assert.equal(rings, 1); assert.equal(field.memory.commits.length, 0);
+  for (let i = 0; i < 60; i++) field.update(1 / 60);
+  rings = 0; field.draw(); assert.equal(rings, 0); assert.equal(field.memory.commits.length, 0);
+  field.pointerUp(91); assert.equal(field.memory.commits.length, 1);
+});
+
+test('multitouch cannot submit either finger, including the last remaining finger', t => {
+  const field = createField(t); sculptDrag(field, { hold: 0.1 });
+  const p = visiblePoints(field)[10]; field.pointerDown(92, p.x, p.y, 800);
+  field.pointerMove(92, p.x + 25, p.y, 900); field.pointerUp(92);
+  const first = field.pointers.get(91); field.pointerMove(91, first.x + 20, first.y, 1000);
+  field.update(0.1, 1100); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 0);
+});
+
+test('ORIGIN during an unfinished drag cancels release submission without resetting existing history', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const history = JSON.stringify(field.memory.commits); sculptDrag(field, { hold: 0.6 });
+  field.setWorkspaceActive(false, 3000); field.pointerUp(91);
+  field.setWorkspaceActive(true, 4000); field.update(0.1, 4100);
+  assert.equal(JSON.stringify(field.memory.commits), history);
+});
+
+test('camera gesture updates do not create or duplicate pointer imprint history', t => {
+  const field = createField(t);
+  for (let i = 0; i < 100; i++) {
+    field.setHand({ x: 0.5, y: 0.5, tracked: true, sampledAt: i * 20, activation: i % 2, openness: i % 2 });
+    field.update(0.02, i * 20);
+  }
+  assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91); field.setHand(null);
+  assert.equal(field.memory.commits.length, 1);
+});
+
 test('mobile pointercancel/lost capture cannot submit a pending imprint; completed memory survives cancel', t => {
-  const field = createField(t); slowSculpt(field, { hold: 2.8 });
+  const field = createField(t); sculptDrag(field, { hold: 2.8 });
   field.pointerUp(91, true);
   for (let i = 0; i < 240; i++) field.update(1 / 60, 4000 + i * 1000 / 60);
   assert.equal(field.memory.commits.length, 0);
-  slowSculpt(field); field.pointerUp(91, true);
+  sculptDrag(field); field.pointerUp(91);
+  sculptDrag(field); field.pointerUp(91, true);
   assert.equal(field.memory.commits.length, 1);
 });
 
 test('VIEW neither commits pending dwell nor modifies completed memory; new SCULPT drag is required', t => {
-  const field = createField(t); slowSculpt(field, { hold: 2.8 }); field.setMode('VIEW', 3500);
+  const field = createField(t); sculptDrag(field, { hold: 2.8 }); field.setMode('VIEW', 3500);
   for (let i = 0; i < 50; i++) field.update(0.1, 3600 + i * 100);
   assert.equal(field.memory.commits.length, 0);
   field.setMode('SCULPT', 9000); field.pointerMove(91, 250, 400, 9100);
   field.update(0.1, 9200); assert.equal(field.memory.commits.length, 0);
   // Start a fresh stroke with timestamps after the boundary.
-  field.inputStartedAt = -Infinity; slowSculpt(field); field.pointerUp(91);
+  field.inputStartedAt = -Infinity; sculptDrag(field); field.pointerUp(91);
   const memory = JSON.stringify(field.memory.commits); field.setMode('VIEW', 10000);
   assert.equal(field.undoImprint(), false); assert.equal(field.reset(), false);
   field.pointerDown(8, 100, 300, 10001); field.pointerMove(8, 200, 330, 10030);
@@ -74,17 +124,17 @@ test('VIEW neither commits pending dwell nor modifies completed memory; new SCUL
 });
 
 test('Undo and Restore clear the correct memory and cancel pending touch input', t => {
-  const field = createField(t); slowSculpt(field); field.pointerUp(91);
-  const first = JSON.stringify(field.memory.commits); slowSculpt(field); field.pointerUp(91);
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const first = JSON.stringify(field.memory.commits); sculptDrag(field); field.pointerUp(91);
   assert.equal(field.memory.commits.length, 2);
   assert.equal(field.undoImprint(), true); assert.equal(JSON.stringify(field.memory.commits), first);
-  slowSculpt(field, { hold: 2 }); field.reset();
+  sculptDrag(field, { hold: 2 }); field.reset();
   assert.equal(field.memory.commits.length, 0); assert.equal(field.memory.sessions.size, 0);
   assert.equal(field.pointers.size, 0); assert.equal(field.undoImprint(), false);
 });
 
 test('FLOW particles and woven skeleton project through the same bounded material field', t => {
-  const field = createField(t); slowSculpt(field); field.pointerUp(91); field.weave.clear();
+  const field = createField(t); sculptDrag(field); field.pointerUp(91); field.weave.clear();
   for (let i = 0; i < 240; i++) field.update(1 / 60, 5000 + i * 1000 / 60);
   const scratch = new Float64Array(3), screen = {};
   let affectedFlow = false;
@@ -102,7 +152,7 @@ test('FLOW particles and woven skeleton project through the same bounded materia
 });
 
 test('ORIGIN suspension preserves imprints and pose, blocks old touch/hand input, and resumes the same pool', t => {
-  const field = createField(t); slowSculpt(field); field.pointerUp(91);
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
   const pool = field.points, memory = JSON.stringify(field.memory.commits);
   field.setWorkspaceActive(false, 5000);
   const snapshot = artworkState(field);
@@ -125,7 +175,7 @@ test('unsaved shape detection ignores idle rotation and VIEW, includes imprints 
   field.update(0.1); assert.equal(field.hasUnsavedShape(), false);
   field.setMode('VIEW', 0); field.pointerDown(1, 100, 200, 10); field.pointerMove(1, 200, 220, 20);
   assert.equal(field.hasUnsavedShape(), false);
-  field.setMode('SCULPT', 30); field.inputStartedAt = -Infinity; slowSculpt(field);
+  field.setMode('SCULPT', 30); field.inputStartedAt = -Infinity; sculptDrag(field);
   assert.equal(field.hasUnsavedShape(), true); field.reset();
   assert.equal(field.hasUnsavedShape(), false);
   field.setForm('grid'); assert.equal(field.hasUnsavedShape(), true);

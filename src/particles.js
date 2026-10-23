@@ -4,7 +4,7 @@ import { GESTURE_TIMING } from './gesture-pipeline.js';
 import { advanceEdgeFlow, createEdgeFlow, FLOW_STATE, fragmentLayer, FragmentLayers, SpatialTrace } from './flow-state.js';
 import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 import { AdaptiveQuality, MOBILE_PERFORMANCE, ParticleBudget } from './performance.js';
-import { ShapeMemory } from './imprint.js';
+import { IMPRINT, ShapeMemory } from './imprint.js';
 
 export class ParticleField {
   constructor(canvas) {
@@ -219,11 +219,12 @@ export class ParticleField {
         point.dragX = x; point.dragY = y;
         point.basisX = this.localDragVector(1, 0, nearest.depth);
         point.basisY = this.localDragVector(0, 1, nearest.depth);
-        this.memory.begin(id, nearest.position, x, y, now);
+        this.memory.begin(id, nearest.position, x, y, now, this.scale * 4.5 / (4.5 - nearest.depth));
       }
       const node = this.nearestNode(point);
       if (node >= 0) this.weave.begin(id, node);
     }
+    if (this.pointers.size > 1) this.memory.blockActive();
   }
 
   pointerMove(id, x, y, now) {
@@ -262,7 +263,9 @@ export class ParticleField {
 
   pointerUp(id, cancelled = false) {
     if (this.mode === 'VIEW') { this.viewPointers.delete(id); return; }
-    this.memory.end(id);
+    const commit = !cancelled && this.workspaceActive && this.form === 'octahedron' && this.pointers.size === 1;
+    if (this.memory.end(id, commit)) this.onMemoryChange?.('COMMIT');
+    else if (this.memory.sessions.get(id)?.stage === 'LIMIT') this.onMemoryChange?.('LIMIT');
     if (cancelled) this.weave.cancel(id); else this.weave.release(id);
     this.pointers.delete(id);
     this.focus = this.pointers.size ? [...this.pointers.values()][0] : null;
@@ -323,7 +326,7 @@ export class ParticleField {
     if (this.hand?.validUntil !== undefined && now > this.hand.validUntil) this.setHand(null);
     this.budget.advance(dt);
     const coefficients = springCoefficients(dt, this.inertia);
-    if (this.memory.update(dt, this.inertia, this.pointers.size === 1 && this.form === 'octahedron')) this.onMemoryChange?.('COMMIT');
+    this.memory.update(dt, this.inertia, this.pointers.size === 1 && this.form === 'octahedron');
     const scatterCoefficients = springCoefficients(dt, this.inertia, 2);
     const layers = {
       edge: springCoefficients(dt, this.inertia, 1.3),
@@ -587,6 +590,15 @@ export class ParticleField {
         if (Math.hypot(a.x - b.x, a.y - b.y) < this.scale * 0.2) { ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); }
       }
       ctx.stroke();
+    }
+    if (this.mode === 'SCULPT' && this.form === 'octahedron') {
+      for (const s of this.memory.sessions.values()) {
+        if (!s.active || s.blocked || s.pulseAge >= IMPRINT.pulseSeconds) continue;
+        const phase = s.pulseAge / IMPRINT.pulseSeconds;
+        ctx.strokeStyle = `rgba(255,255,255,${Math.sin(phase * Math.PI) * 0.22})`;
+        ctx.lineWidth = 0.8; ctx.setLineDash([]); ctx.beginPath();
+        ctx.arc(s.x, s.y, 12 + phase * 12, 0, Math.PI * 2); ctx.stroke();
+      }
     }
     ctx.restore();
   }

@@ -32,8 +32,9 @@ if (field) {
   const syncMemory = () => { $('#undo').disabled = field.mode !== 'SCULPT' || !field.memory.commits.length; };
   field.onMemoryChange = action => {
     syncMemory();
-    status.textContent = action === 'COMMIT' ? `IMPRINT / Local shape remembered (${field.memory.commits.length}/${IMPRINT.maxCommits}). Release to soften.`
-      : action === 'UNDO' ? 'UNDO / Last imprint removed.' : 'RESTORE / Original form restored.';
+    status.textContent = action === 'COMMIT' ? `IMPRINT / Local shape remembered (${field.memory.commits.length}/${IMPRINT.maxCommits}).`
+      : action === 'UNDO' ? 'UNDO / Last imprint removed.'
+      : action === 'LIMIT' ? 'IMPRINT / Memory is full. Undo or Restore to make room.' : 'RESTORE / Original form restored.';
   };
   $('#undo').addEventListener('click', () => { field.undoImprint(); });
   const pause = $('#pause');
@@ -69,7 +70,7 @@ if (field) {
     if (field.reset() === false) return;
     setForm('octahedron'); syncParameters();
     if (field.paused) { field.update(1); field.draw(); }
-    status.textContent = 'RESTORE / Original form restored. Drag slowly, then hold 3s to imprint.';
+    status.textContent = 'RESTORE / Original form restored. Drag to shape. Release to imprint.';
     field.resize();
   });
   window.addEventListener('keydown', event => {
@@ -80,13 +81,18 @@ if (field) {
   });
   canvas.addEventListener('pointerdown', event => {
     if (flow.screen !== 'CREATE') return;
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
     canvas.setPointerCapture(event.pointerId);
     field.pointerDown(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   });
   canvas.addEventListener('pointermove', event => {
     field.pointerMove(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   });
-  canvas.addEventListener('pointerup', event => field.pointerUp(event.pointerId));
+  canvas.addEventListener('pointerup', event => {
+    // Some touch devices coalesce the final move into pointerup.
+    field.pointerMove(event.pointerId, event.clientX, event.clientY, event.timeStamp);
+    field.pointerUp(event.pointerId);
+  });
   for (const name of ['pointercancel', 'lostpointercapture']) canvas.addEventListener(name, event => {
     if (field.pointers.has(event.pointerId) || field.viewPointers.has(event.pointerId)) field.pointerUp(event.pointerId, true);
   });
@@ -128,7 +134,7 @@ if (field) {
     const viewing = field.mode === 'VIEW';
     document.body.dataset.mode = field.mode;
     document.querySelectorAll('.form-button, #dispersion, #reset').forEach(control => { control.disabled = viewing; });
-    status.textContent = viewing ? 'VIEW / Drag to look around. Your form is held.' : 'SCULPT / Begin a new input. Drag slowly, then hold 3s to imprint.';
+    status.textContent = viewing ? 'VIEW / Drag to look around. Your form is held.' : 'SCULPT / Begin a new input. Drag to shape. Release to imprint.';
   }));
   field.onGestureRendered = sample => camera.metrics.rendered(sample);
   const debugMode = new URLSearchParams(location.search).get('debug');
