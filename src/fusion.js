@@ -106,14 +106,15 @@ export function mountFusion({ flow, root, beforeCreate = () => true, particleCou
         $('#translate-status').textContent = `${Math.round(fraction * 100)}% / ${phase === 'READY' ? 'ANALYSIS COMPLETE · MATERIAL READY' : phase}`;
       } });
       if (!result || flow.screen !== 'TRANSLATE' || job.revision !== revision) return;
-      const f = result.features, ctx = $('#translation-map').getContext('2d'), n = f.resolution;
+      const f = result.features, center = result.field?.centroid ?? result.features.centroid, ctx = $('#translation-map').getContext('2d'), n = f.resolution;
       const pixels = ctx.createImageData(n, n);
-      for (let i = 0; i < n * n; i++) { const value = Math.round(Math.min(1, f.luma[i] * .65 + f.edges[i] * .8) * 255); pixels.data.set([value, value, value, 255], i * 4); }
+      for (let i = 0; i < n * n; i++) { const value = Math.round((result.field?.density[i] ?? Math.min(1, f.luma[i] * .65 + f.edges[i] * .8)) * 255); pixels.data.set([value, value, value, 255], i * 4); }
       const map = document.createElement('canvas'); map.width = map.height = n; map.getContext('2d').putImageData(pixels, 0, 0);
       ctx.drawImage(map, 0, 0, 128, 128);
-      ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(f.centroid.x * 128, f.centroid.y * 128, 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(center.x * 128, center.y * 128, 5, 0, Math.PI * 2); ctx.stroke();
       const distribution = Array.from(f.histogram, v => Math.round(v / (n * n) * 100)).join(' / ');
-      $('#translation-details').textContent = `64 × 64 analysis · brightness ${Math.round(f.mean * 100)}% · contrast ${Math.round(f.contrast * 100)}%\nDark → light bins (%): ${distribution}\nVisual center: ${Math.round(f.centroid.x * 100)}%, ${Math.round(f.centroid.y * 100)}% · circle on map\nContour tangent: ${(f.direction.angle * 180 / Math.PI).toFixed(0)}° · coherence ${Math.round(f.direction.confidence * 100)}%\n${f.lowContrast ? 'Low contrast: restrained geometry; no invented contours.' : 'Contour energy and luminance shape an octahedral volume.'}`;
+      $('#translation-details').textContent = `64 × 64 analysis · brightness ${Math.round(f.mean * 100)}% · contrast ${Math.round(f.contrast * 100)}%\nDark → light bins (%): ${distribution}\nVisual center: ${Math.round(center.x * 100)}%, ${Math.round(center.y * 100)}% · circle on map\nContour tangent: ${(f.direction.angle * 180 / Math.PI).toFixed(0)}° · coherence ${Math.round(f.direction.confidence * 100)}%\n${result.field?.noiseDominated ? 'Fine texture dominates: weak details are suppressed; a restrained volume is used.' : f.lowContrast ? 'Low contrast: restrained geometry; no invented contours.' : 'Multi-scale density follows image structure; no fixed geometric shell.'}`;
+      $('#translation-details').textContent += `\n${result.stats.nodes} shared nodes · ${result.stats.lines} links · ${result.stats.faces} faces\n${result.stats.isolated} independent nodes · face area budget ${(result.stats.areaRatio * 100).toFixed(2)}% of XY bounds (3D triangle area)\nDensity combines silhouette, contours, local contrast, structure and corners; not object recognition.`;
       $('#translate-create').disabled = false;
     } catch (error) {
       if (error.name !== 'AbortError' && job.revision === revision && flow.screen === 'TRANSLATE') $('#translate-status').textContent = error.message || 'Analysis failed. Edit the frame or retry.';
@@ -173,7 +174,9 @@ export function mountFusion({ flow, root, beforeCreate = () => true, particleCou
   $('#translate-edit').addEventListener('click', () => { resetTranslation(); flow.editImage(); sync(); $('#fusion-title').focus({ preventScroll: true }); });
   $('#translate-regenerate').addEventListener('click', () => { if (flow.screen === 'TRANSLATE') translate(); });
   $('#translate-create').addEventListener('click', () => {
-    if (flow.screen === 'TRANSLATE' && job.result && beforeCreate(job.result)) flow.createFusion(job.result);
+    if (flow.screen !== 'TRANSLATE' || !job.result) return;
+    if (job.result.cachedCount !== particleCount()) { translate(); return; }
+    if (beforeCreate(job.result)) flow.createFusion(job.result);
   });
   window.addEventListener('pagehide', () => {
     clear();

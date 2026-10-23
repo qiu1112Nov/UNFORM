@@ -641,3 +641,58 @@ test('FUSION swipe never commits; Restore returns to translated rest rather than
   assert.equal(field.material, material); assert.deepEqual(field.points.map(p => p.home), homes);
   assert.ok(field.points.every(p => p.target === p.home));
 });
+
+test('Density Field nodes and topology stay identical through VIEW, IMPRINT, scatter and Undo/Restore', async t => {
+  const { TranslationJob } = await import('../src/image-translation.js');
+  const { densityImage } = await import('./helpers/density-fixtures.js');
+  const field = createField(t);
+  sculptDrag(field); field.pointerUp(91);
+  const geometryPoints = field.points, geometryMemory = field.memory;
+  const m = await new TranslationJob().run(densityImage('ring'), { yieldTask: async () => {}, count: field.poolCount });
+  field.switchArtwork('FUSION', m);
+  assert.equal(field.mode, 'VIEW'); assert.equal(field.nodeScreens, field.points);
+  assert.equal(field.mesh, m.mesh); assert.equal(field.budget.selected.reduce((a,b)=>a+b), field.count);
+  const before=field.points.map(p=>[...p.world]);
+  field.pointerDown(3,190,400,1000);field.pointerMove(3,230,410,1100);field.pointerUp(3);field.update(.1);
+  assert.deepEqual(field.points.map(p=>[...p.world]),before);assert.equal(field.memory.commits.length,0);
+  field.setMode('SCULPT',-1);
+  let p=visiblePoints(field).find(p=>p.kind!=='interior'&&p.x>70&&p.x<310);
+  field.pointerDown(91,p.x,p.y,2000);
+  const x=p.x,y=p.y;
+  for(let i=1;i<=5;i++)field.pointerMove(91,x+i*4,y+i,2000+i*100);
+  field.pointerUp(91);assert.equal(field.memory.commits.length,1);
+  for(let i=0;i<120;i++)field.update(1/60);
+  assert.ok(field.points.some(p=>Math.hypot(...p.world.map((v,a)=>v-p.home[a]))>.01));
+  for(const [a,b] of field.mesh.links){assert.equal(field.nodeScreens[a],field.points[a]);assert.equal(field.nodeScreens[b],field.points[b]);}
+  for(let swipe=0;swipe<3;swipe++){
+    p=visiblePoints(field).find(p=>p.kind!=='interior'); const x=p.x,y=p.y;
+    field.pointerDown(7,x,y,4000+swipe*100);field.pointerMove(7,x+80,y,4020+swipe*100);field.pointerUp(7);
+  }
+  assert.equal(field.memory.commits.length,1);
+  assert.ok(field.points.some(p=>p.scatter>.1));
+  for(let i=0;i<300;i++)field.update(1/60);
+  assert.equal(field.memory.commits.length,1);
+  assert.equal(field.undoImprint(),true);assert.equal(field.memory.commits.length,0);
+  const rest=field.points.map(p=>p.home);
+  field.reset();assert.equal(field.material,m);assert.deepEqual(field.points.map(p=>p.home),rest);
+  field.draw();
+  field.switchArtwork('GEOMETRY');assert.equal(field.points,geometryPoints);assert.equal(field.memory,geometryMemory);assert.equal(field.memory.commits.length,1);
+  field.switchArtwork('FUSION');assert.equal(field.mesh,m.mesh);assert.equal(field.nodeScreens,field.points);
+});
+
+test('density topology and geometric glyphs draw with bounded mobile batched paths at every quality tier', async t => {
+  const { TranslationJob } = await import('../src/image-translation.js');
+  const { densityImage } = await import('./helpers/density-fixtures.js');
+  let strokes=0,fills=0;
+  const ctx=new Proxy({}, {get:(_,key)=>key==='stroke'?()=>{strokes++;}:key==='fill'?()=>{fills++;}:()=>{}});
+  const field=createField(t,{context:ctx});
+  const m=await new TranslationJob().run(densityImage('corner'),{yieldTask:async()=>{}});
+  field.switchArtwork('FUSION',m);
+  for(let level=0;level<5;level++){
+    field.quality.level=level;field.setParticleCount(field.quality.count);field.budget.advance(1);
+    strokes=0;fills=0;field.draw();
+    assert.ok(strokes<30,'link/glyph strokes stay batched rather than one per link');
+    assert.ok(fills<=20,'surface budget stays sparse');
+    assert.equal(field.budget.selected.reduce((a,b)=>a+b),field.count);
+  }
+});

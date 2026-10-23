@@ -1,4 +1,5 @@
 import { octahedronParticle } from './octahedron.js';
+import { buildDensityField, DensityMaterial } from './density-field.js';
 
 export const TRANSLATION = Object.freeze({ resolution: 64, maxInputPixels: 512 * 512, maxCandidates: 6 });
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
@@ -115,20 +116,12 @@ export class TranslationJob {
     const controller = this.controller = new AbortController();
     const features = await analyzeImage(input, { ...options, signal: controller.signal });
     abort(controller.signal);
-    const material = new ImageMaterial(features, revision);
     const count = options.count ?? 850;
     if (!Number.isInteger(count) || count < 128 || count > 1900) throw new Error('Unsupported particle budget.');
-    const samples = new Array(count);
-    for (let i = 0; i < count; i++) {
-      abort(controller.signal);
-      samples[i] = material.sample(i, count);
-      if (!samples[i].point.every(Number.isFinite)) throw new Error('Could not build a stable structure.');
-      if (i % 64 === 63 || i === count - 1) {
-        options.progress?.('STRUCTURE', .75 + .25 * (i + 1) / count);
-        await (options.yieldTask ?? yieldFrame)(); abort(controller.signal);
-      }
-    }
-    material.cachedCount = count; material.cached = samples;
+    const task = { ...options, signal: controller.signal };
+    const field = await buildDensityField(features, task);
+    const material = new DensityMaterial(features, field, revision);
+    await material.prepare(count, task); abort(controller.signal);
     if (revision !== this.revision) return null;
     this.result = material; options.progress?.('READY', 1); return material;
   }

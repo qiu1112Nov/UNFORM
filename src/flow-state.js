@@ -78,6 +78,10 @@ export function createEdgeFlow(index, count, home) {
 
 export function advanceEdgeFlow(flow, time) {
   const t = (1 - Math.cos(flow.phase + time * flow.angularSpeed)) / 2;
+  if (flow.graph) {
+    for (let axis = 0; axis < 3; axis++) flow.position[axis] = flow.a[axis] * (1 - t) + flow.b[axis] * t;
+    return;
+  }
   flow.position[flow.axisA] = flow.a[flow.axisA] * (1 - t);
   flow.position[flow.axisB] = flow.b[flow.axisB] * t;
 }

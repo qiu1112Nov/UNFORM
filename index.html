@@ -69,11 +69,11 @@
             <p class="origin-description">IMAGE → MATERIAL</p>
             <progress id="translate-progress" max="1" value="0" aria-label="Image analysis progress"></progress>
             <p id="translate-status" class="fusion-note" role="status" aria-live="polite">Ready to analyze locally.</p>
-            <canvas id="translation-map" width="128" height="128" aria-label="Grayscale and contour map; circle marks luminance-weighted visual center"></canvas>
+            <canvas id="translation-map" width="128" height="128" aria-label="Density field preview; circle marks structure-weighted visual center"></canvas>
             <p id="translation-details" class="fusion-note"></p>
             <button type="button" id="translate-create" class="fusion-primary" disabled>ENTER CREATE / VIEW →</button>
             <button type="button" id="translate-regenerate" class="fusion-secondary">REGENERATE</button>
-            <p class="fusion-note">Local luminance and contour analysis guide density and a three-dimensional octahedral skeleton. This is a geometric interpretation, not object recognition.</p>
+            <p class="fusion-note">Multi-scale density follows image contours and local structure. Shared spatial nodes form points, connections and sparse facets. This is an image interpretation, not object recognition.</p>
             <p class="fusion-note">Your GEOMETRY artwork remains unchanged. Your image and generated material stay only in this tab; refreshing loses them.</p>
             <button type="button" id="translate-edit" class="fusion-primary">EDIT FRAME</button>
             <button type="button" id="translate-cancel" class="fusion-secondary">CANCEL / BACK TO ORIGIN</button>

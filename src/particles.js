@@ -7,6 +7,12 @@ import { AdaptiveQuality, MOBILE_PERFORMANCE, ParticleBudget } from './performan
 import { IMPRINT, ShapeMemory } from './imprint.js';
 import { SCULPT_INPUT, strokeIntent } from './sculpt-input.js';
 
+const GLYPH_OCTA = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+const GLYPH_TETRA = [[0,1,0],[-.85,-.5,.5],[.85,-.5,.5],[0,-.5,-1]];
+const GLYPH_OCTA_LINKS = [];
+for (let a = 0; a < 6; a++) for (let b = a + 1; b < 6; b++) if (Math.floor(a / 2) !== Math.floor(b / 2)) GLYPH_OCTA_LINKS.push([a,b]);
+const GLYPH_TETRA_LINKS = [[0,1],[0,2],[0,3],[1,2],[1,3],[2,3]];
+
 const ARTWORK_KEYS = [
   'material', 'fragments', 'trace', 'traceWorldA', 'traceWorldB', 'traceCapture', 'traceSourceProjection',
   'traceScreenA', 'traceScreenB', 'mesh', 'weave', 'memory', 'materialPoint', 'sculptOffset',
@@ -14,7 +20,7 @@ const ARTWORK_KEYS = [
   'activation', 'impulse', 'quickFeedback', 'pendingGesture', 'lastResponseId', 'previewTarget', 'targetActivation',
   'handYaw', 'handPitch', 'centerMotionX', 'centerMotionY', 'focus', 'hand', 'pointers',
   'workspaceActive', 'mode', 'sculptHeld', 'inputStartedAt', 'viewPointers', 'viewYaw', 'viewPitch',
-  'time', 'paused', 'reducedMotion', 'nodeScreens',
+  'time', 'paused', 'reducedMotion', 'nodeScreens', 'glyphWorld', 'glyphScreens',
 ];
 
 export class ParticleField {
@@ -50,23 +56,23 @@ export class ParticleField {
     this.traceCapture = new Float32Array(3);
     this.traceSourceProjection = { x: 0, y: 0, depth: 0 };
     this.traceScreenA = { x: 0, y: 0 }; this.traceScreenB = { x: 0, y: 0 };
-    this.mesh = buildSurfaceMesh(this.mobile ? 6 : 8);
-    if (material) this.mesh.nodes = this.mesh.nodes.map(point => Array.from(material.map(point)));
+    this.mesh = material?.densityField ? material.mesh : buildSurfaceMesh(this.mobile ? 6 : 8);
+    if (material && !material.densityField) this.mesh.nodes = this.mesh.nodes.map(point => Array.from(material.map(point)));
     this.weave = new WeaveNetwork(this.mesh);
     this.memory = new ShapeMemory(); this.materialPoint = new Float64Array(3);
     this.sculptOffset = new Float64Array(3);
     this.points = Array.from({ length: this.poolCount }, (_, i) => {
       const sample = material ? material.sample(i, this.poolCount) : octahedronParticle(i, this.poolCount);
-      const flow = createEdgeFlow(i, this.poolCount, sample.canonical ?? sample.point);
+      const flow = material?.densityField ? material.createFlow(i) : createEdgeFlow(i, this.poolCount, sample.canonical ?? sample.point);
       if (flow && material) flow.materialPosition = new Float64Array(sample.point);
       return {
-        kind: sample.kind, home: sample.point, position: [...sample.point], target: [...sample.point],
-        layer: fragmentLayer(sample.kind, sample.canonical ?? sample.point), flow,
+        kind: sample.kind, density: material?.densityField ? sample.density : undefined, glyph: sample.glyph ?? 'point', home: sample.point, position: [...sample.point], target: [...sample.point],
+        layer: material?.densityField ? (sample.kind === 'interior' ? 2 : sample.corner > .35 ? 0 : 1) : fragmentLayer(sample.kind, sample.canonical ?? sample.point), flow,
         world: new Float32Array(sample.point), traceSlot: -1, traceWeight: 0,
         motion: sample.point.map(value => ({ value, velocity: 0 })),
         deformation: { value: 0, velocity: 0 },
         scatterMotion: { value: 0, velocity: 0 },
-        thread: sample.kind === 'interior' ? null : nearestThread(sample.point, this.mesh),
+        thread: material?.densityField ? (this.mesh.incident[i] < 0 ? null : { link: this.mesh.incident[i], point: sample.point, distance: 0 }) : sample.kind === 'interior' ? null : nearestThread(sample.point, this.mesh),
         seed: i * 2.399963, radius: 0.5 + ((i * 7919) % 997) / 997 * 0.7,
         driftSin: new Float32Array([0, 1, 2].map(axis => Math.sin(i * 2.399963 + axis * 2.1))),
         driftCos: new Float32Array([0, 1, 2].map(axis => Math.cos(i * 2.399963 + axis * 2.1))),
@@ -92,7 +98,9 @@ export class ParticleField {
     this.viewPointers = new Map(); this.viewYaw = 0; this.viewPitch = 0;
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.reducedMotion = this.paused;
-    this.nodeScreens = this.mesh.nodes.map(() => ({ x: 0, y: 0, depth: 0 }));
+    this.nodeScreens = material?.densityField ? this.points : this.mesh.nodes.map(() => ({ x: 0, y: 0, depth: 0 }));
+    this.glyphWorld = new Float64Array(3);
+    this.glyphScreens = Array.from({ length: 6 }, () => ({ x: 0, y: 0, depth: 0 }));
   }
 
   switchArtwork(name, material = null) {
@@ -515,7 +523,7 @@ export class ParticleField {
       }
       this.project(p.world, p);
     }
-    this.mesh.nodes.forEach((point, i) => this.project(this.memory.deform(point, this.materialPoint), this.nodeScreens[i]));
+    if (!this.material?.densityField) this.mesh.nodes.forEach((point, i) => this.project(this.memory.deform(point, this.materialPoint), this.nodeScreens[i]));
   }
 
   drawTraces() {
@@ -559,11 +567,27 @@ export class ParticleField {
     const coherence = 1 - this.impulse * this.dispersion;
     // Faces are only local, sparse and almost transparent after all corners settle.
     let filled = 0;
-    const facetLimit = this.mobile ? (this.quality.level === 0 ? 4 : this.quality.level === 1 ? 8 : 14) : 14;
-    for (let i = 0; i < this.mesh.triangles.length && filled < facetLimit; i += 5) {
+    const density = this.material?.densityField;
+    const facetLimit = density ? (this.mobile ? (this.quality.level === 0 ? 4 : 14) : 28) : this.mobile ? (this.quality.level === 0 ? 4 : this.quality.level === 1 ? 8 : 14) : 14;
+    for (let i = 0; i < this.mesh.triangles.length && filled < facetLimit; i += density ? 1 : 5) {
       const indices = this.mesh.triangles[i];
       const ia = indices[0], ib = indices[1], ic = indices[2];
-      const strength = Math.min(this.weave.charge[ia] * (1 - this.weave.damage[ia]), this.weave.charge[ib] * (1 - this.weave.damage[ib]), this.weave.charge[ic] * (1 - this.weave.damage[ic]));
+      let strength = Math.min(this.weave.charge[ia] * (1 - this.weave.damage[ia]), this.weave.charge[ib] * (1 - this.weave.damage[ib]), this.weave.charge[ic] * (1 - this.weave.damage[ic]));
+      if (density) {
+        if (!this.budget.selected[ia] || !this.budget.selected[ib] || !this.budget.selected[ic]) continue;
+        const a = this.points[ia], b = this.points[ib], c = this.points[ic];
+        const damage = Math.max(this.weave.damage[ia], this.weave.damage[ib], this.weave.damage[ic]);
+        if (damage > .15 || this.impulse > .25 || Math.max(a.scatterMotion.value, b.scatterMotion.value, c.scatterMotion.value) > .05) continue;
+        let stable = true;
+        for (let side = 0; side < 3; side++) {
+          const p = this.points[side === 0 ? ia : side === 1 ? ib : ic], q = this.points[side === 0 ? ib : side === 1 ? ic : ia];
+          const rest = Math.hypot(p.home[0]-q.home[0], p.home[1]-q.home[1], p.home[2]-q.home[2]);
+          const live = Math.hypot(p.world[0]-q.world[0], p.world[1]-q.world[1], p.world[2]-q.world[2]);
+          if (live > rest * 1.5 || live < rest * .5) stable = false;
+        }
+        if (!stable) continue;
+        strength = Math.max(strength, .90 + this.mesh.faceWeights[i] * .05);
+      }
       if (strength < 0.88) continue;
       const a = this.nodeScreens[ia], b = this.nodeScreens[ib], c = this.nodeScreens[ic];
       ctx.fillStyle = `rgba(255,255,255,${(strength - 0.88) * 0.22 * coherence})`;
@@ -577,10 +601,12 @@ export class ParticleField {
       const strength = this.weave.strength(i);
       const integrity = 1 - edgeActivation * (retained(i, this.dispersion) ? 0.12 : 1);
       const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
-      const base = this.mesh.boundary[i] ? 0.12 * intact : 0;
+      const visibility = density ? Math.min(this.budget.opacity[ia], this.budget.opacity[ib]) : 1;
+      if (visibility < .001) continue;
+      const base = this.mesh.boundary[i] ? (density ? .08 + this.mesh.linkWeights[i] * .09 : .12) * intact * visibility : 0;
       if ((strength < 0.025 && base < 0.005) || integrity < 0.025) continue;
       if (this.mobile) {
-        const opacity = (base + strength * 0.43) * integrity;
+        const opacity = (base + strength * 0.43 * visibility) * integrity;
         const dashed = integrity < 0.7 || strength < 0.7 && strength > 0.025;
         const buckets = MOBILE_PERFORMANCE.weaveOpacityBuckets;
         const bucket = Math.min(buckets - 1, Math.floor(opacity / 0.6 * buckets)) + (dashed ? buckets : 0);
@@ -590,7 +616,7 @@ export class ParticleField {
         this.weavePathSizes[bucket]++;
         continue;
       }
-      ctx.strokeStyle = `rgba(255,255,255,${(base + strength * 0.43) * integrity})`;
+      ctx.strokeStyle = `rgba(255,255,255,${(base + strength * 0.43 * visibility) * integrity})`;
       ctx.lineWidth = 0.55;
       ctx.setLineDash(integrity < 0.7 ? [2, 4] : strength < 0.7 && strength > 0.025 ? [1.5 + strength * 3, 4 * (1 - strength)] : []);
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(a.x + (b.x - a.x) * integrity, a.y + (b.y - a.y) * integrity); ctx.stroke();
@@ -609,6 +635,24 @@ export class ParticleField {
     ctx.setLineDash([]);
   }
 
+  drawDensityGlyphs() {
+    const ctx = this.ctx;
+    ctx.strokeStyle = '#ffffff88'; ctx.lineWidth = .45; ctx.setLineDash([]); ctx.beginPath();
+    for (let slot = 0; slot < this.budget.length; slot++) {
+      const i = this.budget.indices[slot], p = this.points[i];
+      if (p.glyph === 'point' || this.budget.opacity[i] < .5) continue;
+      const vertices = p.glyph === 'octa' ? GLYPH_OCTA : GLYPH_TETRA;
+      const links = p.glyph === 'octa' ? GLYPH_OCTA_LINKS : GLYPH_TETRA_LINKS;
+      const radius = .014 + Math.min(.008, (p.density ?? 0) * .008);
+      for (let v = 0; v < vertices.length; v++) {
+        for (let a = 0; a < 3; a++) this.glyphWorld[a] = p.world[a] + vertices[v][a] * radius;
+        this.project(this.glyphWorld, this.glyphScreens[v]);
+      }
+      for (const [a, b] of links) { ctx.moveTo(this.glyphScreens[a].x, this.glyphScreens[a].y); ctx.lineTo(this.glyphScreens[b].x, this.glyphScreens[b].y); }
+    }
+    ctx.stroke();
+  }
+
   draw() {
     const ctx = this.ctx;
     ctx.fillStyle = '#101111'; ctx.fillRect(0, 0, this.width, this.height);
@@ -624,18 +668,20 @@ export class ParticleField {
       for (let slot = 0; slot < this.budget.length; slot++) {
         const i = this.budget.indices[slot]; if (i % 3 !== group) continue;
         const p = this.points[i];
+        if (this.material?.densityField && this.form === 'octahedron' && p.glyph !== 'point') continue;
         const pulse = p.flow && this.form === 'octahedron' ? 1 + FLOW_STATE.flow.luminance * (p.driftSin[0] * this.pulseCos + p.driftCos[0] * this.pulseSin) : 1;
         const visibility = this.budget.opacity[i];
         const radius = ((p.kind === 'interior' ? 0.45 : 0.65) + (p.depth + 1) * 0.22) * pulse * (visibility < 1 ? Math.sqrt(visibility) : 1);
-        if (i % 23 === 0) {
+        if (!this.material?.densityField && i % 23 === 0) {
           const r = radius * 1.8;
           ctx.moveTo(p.x, p.y - r); ctx.lineTo(p.x + r * 0.55, p.y); ctx.lineTo(p.x, p.y + r); ctx.lineTo(p.x - r * 0.55, p.y); ctx.closePath();
-        } else if (i % 31 === 0) {
+        } else if (!this.material?.densityField && i % 31 === 0) {
           ctx.moveTo(p.x, p.y - radius * 1.5); ctx.lineTo(p.x + radius, p.y + radius); ctx.lineTo(p.x - radius, p.y + radius); ctx.closePath();
         } else { ctx.moveTo(p.x + radius, p.y); ctx.arc(p.x, p.y, radius, 0, Math.PI * 2); }
       }
       ctx.fill();
     }
+    if (this.material?.densityField && this.form === 'octahedron') this.drawDensityGlyphs();
     if (this.form === 'lines' || this.form === 'grid') {
       ctx.strokeStyle = '#ffffff1a'; ctx.lineWidth = 0.5; ctx.beginPath();
       const step = this.form === 'lines' ? 9 : 1;
