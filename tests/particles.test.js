@@ -592,3 +592,52 @@ test('TRACE projects consistently after rotating in VIEW and resuming SCULPT', t
   }
   assert.ok(captures > 0);
 });
+
+test('FUSION uses shared mapped skeleton, retains GEOMETRY memory and never starts a second renderer', async t => {
+  const { analyzeImage, ImageMaterial } = await import('../src/image-translation.js');
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const originalPoints = field.points, originalMemory = field.memory, originalMesh = field.mesh;
+  const originalCommits = JSON.stringify(field.memory.commits);
+  let requests = 0; globalThis.requestAnimationFrame = () => { requests++; return 123; };
+  const data = new Uint8ClampedArray(32 * 32 * 4);
+  for (let i = 0; i < 1024; i++) { const v = i % 32 > 20 ? 240 : 30; data.set([v,v,v,255], i * 4); }
+  const material = new ImageMaterial(await analyzeImage({ pixels: { width: 32, height: 32, data } }, { yieldTask: async () => {} }));
+  field.switchArtwork('FUSION', material);
+  assert.equal(requests, 0); assert.equal(field.mode, 'VIEW'); assert.equal(field.material, material);
+  assert.notEqual(field.points, originalPoints); assert.equal(field.memory.commits.length, 0);
+  assert.notDeepEqual(field.mesh.nodes, originalMesh.nodes);
+  const fusionPoints = field.points;
+  const frozen = field.points.map(p => [...p.world]);
+  field.pointerDown(2, 190, 400, 100); field.pointerMove(2, 220, 410, 200); field.pointerUp(2); field.update(.1);
+  assert.deepEqual(field.points.map(p => [...p.world]), frozen); assert.equal(field.memory.commits.length, 0);
+  field.setMode('SCULPT', -1); sculptDrag(field); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 1);
+  const fusionMemory = field.memory;
+  for (let i = 0; i < 40; i++) field.update(1 / 60);
+  const flowing = field.points.find(p => p.flow);
+  assert.deepEqual(Array.from(flowing.flow.materialPosition), Array.from(material.map(flowing.flow.position)));
+  field.switchArtwork('GEOMETRY');
+  assert.equal(field.points, originalPoints); assert.equal(field.memory, originalMemory);
+  assert.equal(JSON.stringify(field.memory.commits), originalCommits); assert.equal(field.mesh, originalMesh);
+  field.switchArtwork('FUSION');
+  assert.equal(field.points, fusionPoints); assert.equal(field.memory, fusionMemory); assert.equal(field.mode, 'SCULPT');
+  assert.equal(field.undoImprint(), true); assert.equal(field.memory.commits.length, 0);
+  assert.equal(requests, 0); assert.equal(field.dispersion, .55); assert.equal(field.inertia, .65);
+});
+
+test('FUSION swipe never commits; Restore returns to translated rest rather than GEOMETRY', async t => {
+  const { analyzeImage, ImageMaterial } = await import('../src/image-translation.js');
+  const field = createField(t), data = new Uint8ClampedArray([200,200,200,255]);
+  const material = new ImageMaterial(await analyzeImage({ pixels: { width: 1, height: 1, data } }, { yieldTask: async () => {} }));
+  field.switchArtwork('FUSION', material); field.setMode('SCULPT', -1);
+  const homes = field.points.map(p => [...p.home]);
+  sculptDrag(field); field.pointerUp(91); assert.equal(field.memory.commits.length, 1);
+  const p = visiblePoints(field).find(p => p.kind === 'surface');
+  field.pointerDown(4, p.x, p.y, 2000); field.pointerMove(4, p.x + 80, p.y, 2020); field.pointerUp(4);
+  assert.equal(field.memory.commits.length, 1); assert.ok(field.points.some(p => p.scatter > .1));
+  for (let i = 0; i < 400; i++) field.update(1 / 60);
+  assert.equal(field.memory.commits.length, 1);
+  field.reset(); assert.equal(field.memory.commits.length, 0);
+  assert.equal(field.material, material); assert.deepEqual(field.points.map(p => p.home), homes);
+  assert.ok(field.points.every(p => p.target === p.home));
+});

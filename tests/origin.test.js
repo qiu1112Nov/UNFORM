@@ -70,3 +70,17 @@ test('only a prepared IMPORT can enter TRANSLATE; edit and cancel never enter CR
   flow.translate(true); assert.equal(flow.back(), true); assert.equal(flow.screen, 'ORIGIN');
   assert.equal(events.some(e => ['enter', 'leave', 'confirm'].includes(e[0])), false);
 });
+
+test('confirmed FUSION enters CREATE once and both origin paths resume independently', () => {
+  const { flow, events } = setup();
+  assert.equal(flow.resumeFusion(), false);
+  flow.choose('GEOMETRY'); flow.back(); assert.equal(flow.resumeFusion(), false);
+  assert.equal(flow.createFusion({}), false);
+  flow.choose('FUSION'); flow.translate(true);
+  assert.equal(flow.createFusion(null), false);
+  assert.equal(flow.createFusion({ kind: 'material' }), true);
+  assert.equal(flow.path, 'FUSION'); assert.equal(flow.createFusion({}), false);
+  flow.back(); assert.equal(flow.resumeFusion(), true); assert.equal(flow.path, 'FUSION');
+  flow.back(); flow.choose('GEOMETRY'); assert.equal(flow.path, 'GEOMETRY');
+  assert.equal(events.filter(e => e[0] === 'enter' && e[1] === true).length, 1);
+});

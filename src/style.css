@@ -214,3 +214,7 @@ body:not([data-screen=CREATE]) .gesture-debug { display: none; }
   .fusion-frame { width: min(100%, 360px); margin-inline: auto; }
   .fusion-tools { gap: 10px; }
 }
+#translate-progress { width: 100%; height: 4px; accent-color: #eee; }
+#translation-map { width: 128px; height: 128px; border: 1px solid var(--line); }
+#translation-details { white-space: pre-line; }
+#fusion-resume { margin-top: 20px; }

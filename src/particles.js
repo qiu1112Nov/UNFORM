@@ -7,15 +7,43 @@ import { AdaptiveQuality, MOBILE_PERFORMANCE, ParticleBudget } from './performan
 import { IMPRINT, ShapeMemory } from './imprint.js';
 import { SCULPT_INPUT, strokeIntent } from './sculpt-input.js';
 
+const ARTWORK_KEYS = [
+  'material', 'fragments', 'trace', 'traceWorldA', 'traceWorldB', 'traceCapture', 'traceSourceProjection',
+  'traceScreenA', 'traceScreenB', 'mesh', 'weave', 'memory', 'materialPoint', 'sculptOffset',
+  'points', 'budget', 'weavePaths', 'weavePathSizes', 'form', 'dispersion', 'inertia',
+  'activation', 'impulse', 'quickFeedback', 'pendingGesture', 'lastResponseId', 'previewTarget', 'targetActivation',
+  'handYaw', 'handPitch', 'centerMotionX', 'centerMotionY', 'focus', 'hand', 'pointers',
+  'workspaceActive', 'mode', 'sculptHeld', 'inputStartedAt', 'viewPointers', 'viewYaw', 'viewPitch',
+  'time', 'paused', 'reducedMotion', 'nodeScreens',
+];
+
 export class ParticleField {
+  static capacity() {
+    return matchMedia('(max-width: 800px)').matches || matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 4) <= 4 ? MOBILE_PERFORMANCE.poolCount : 1900;
+  }
   constructor(canvas) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     if (!this.ctx) throw new Error('Canvas 2D is unavailable.');
-    this.mobile = matchMedia('(max-width: 800px)').matches || matchMedia('(pointer: coarse)').matches || (navigator.hardwareConcurrency || 4) <= 4;
-    this.poolCount = this.mobile ? MOBILE_PERFORMANCE.poolCount : 1900;
+    this.poolCount = ParticleField.capacity(); this.mobile = this.poolCount !== 1900;
     this.quality = new AdaptiveQuality(this.mobile);
     this.count = this.quality.count; this.inferenceMs = null;
+    this.artworks = new Map(); this.artworkName = 'GEOMETRY'; this.frame = 0; this.last = 0;
+    this.initializeArtwork();
+    this.resize = this.resize.bind(this);
+    window.addEventListener('resize', this.resize);
+    this.resize();
+    this.animate = this.animate.bind(this);
+    this.frame = requestAnimationFrame(this.animate);
+    document.addEventListener('visibilitychange', () => {
+      cancelAnimationFrame(this.frame);
+      if (document.hidden) this.clearPointers();
+      else { this.last = 0; this.quality.resetTiming(); this.frame = requestAnimationFrame(this.animate); }
+    });
+  }
+
+  initializeArtwork(material = null) {
+    this.material = material;
     this.fragments = new FragmentLayers();
     this.trace = new SpatialTrace(this.poolCount, this.mobile, this.mobile ? MOBILE_PERFORMANCE.traceSamples : undefined);
     this.traceWorldA = new Float32Array(3); this.traceWorldB = new Float32Array(3);
@@ -23,14 +51,17 @@ export class ParticleField {
     this.traceSourceProjection = { x: 0, y: 0, depth: 0 };
     this.traceScreenA = { x: 0, y: 0 }; this.traceScreenB = { x: 0, y: 0 };
     this.mesh = buildSurfaceMesh(this.mobile ? 6 : 8);
+    if (material) this.mesh.nodes = this.mesh.nodes.map(point => Array.from(material.map(point)));
     this.weave = new WeaveNetwork(this.mesh);
     this.memory = new ShapeMemory(); this.materialPoint = new Float64Array(3);
     this.sculptOffset = new Float64Array(3);
     this.points = Array.from({ length: this.poolCount }, (_, i) => {
-      const sample = octahedronParticle(i, this.poolCount);
+      const sample = material ? material.sample(i, this.poolCount) : octahedronParticle(i, this.poolCount);
+      const flow = createEdgeFlow(i, this.poolCount, sample.canonical ?? sample.point);
+      if (flow && material) flow.materialPosition = new Float64Array(sample.point);
       return {
         kind: sample.kind, home: sample.point, position: [...sample.point], target: [...sample.point],
-        layer: fragmentLayer(sample.kind, sample.point), flow: createEdgeFlow(i, this.poolCount, sample.point),
+        layer: fragmentLayer(sample.kind, sample.canonical ?? sample.point), flow,
         world: new Float32Array(sample.point), traceSlot: -1, traceWeight: 0,
         motion: sample.point.map(value => ({ value, velocity: 0 })),
         deformation: { value: 0, velocity: 0 },
@@ -61,18 +92,26 @@ export class ParticleField {
     this.viewPointers = new Map(); this.viewYaw = 0; this.viewPitch = 0;
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.reducedMotion = this.paused;
-    this.frame = 0; this.last = 0;
     this.nodeScreens = this.mesh.nodes.map(() => ({ x: 0, y: 0, depth: 0 }));
-    this.resize = this.resize.bind(this);
-    window.addEventListener('resize', this.resize);
-    this.resize();
-    this.animate = this.animate.bind(this);
-    this.frame = requestAnimationFrame(this.animate);
-    document.addEventListener('visibilitychange', () => {
-      cancelAnimationFrame(this.frame);
-      if (document.hidden) this.clearPointers();
-      else { this.last = 0; this.quality.resetTiming(); this.frame = requestAnimationFrame(this.animate); }
-    });
+  }
+
+  switchArtwork(name, material = null) {
+    if (!['GEOMETRY', 'FUSION'].includes(name)) throw new RangeError('Unknown artwork');
+    if (name === this.artworkName && (!material || material === this.material)) return false;
+    this.clearPointers();
+    this.artworks.set(this.artworkName, Object.fromEntries(ARTWORK_KEYS.map(key => [key, this[key]])));
+    const saved = this.artworks.get(name);
+    const fresh = !saved || (material && saved.material !== material);
+    if (name === 'FUSION' && fresh && !material) throw new Error('Analyze an image before entering FUSION.');
+    if (saved && (!material || saved.material === material)) Object.assign(this, saved);
+    else this.initializeArtwork(material);
+    this.artworkName = name;
+    this.budget.setCount(this.quality.count); this.count = this.quality.count;
+    this.workspaceActive = true; this.holdInput(performance.now());
+    // New image sculptures enter VIEW; returning sessions keep their chosen mode.
+    if (name === 'FUSION' && fresh) this.mode = 'VIEW';
+    this.resize(); this.onMemoryChange?.('CLEAR');
+    return true;
   }
 
   resize() {
@@ -399,7 +438,7 @@ export class ParticleField {
       const pull = thread ? this.weave.strength(thread.link) * 0.92 : 0;
       const flowing = this.form === 'octahedron' && p.flow;
       if (flowing) advanceEdgeFlow(flowing, this.time);
-      const base = flowing ? flowing.position : p.target;
+      const base = flowing ? (this.material ? this.material.map(flowing.position, flowing.materialPosition) : flowing.position) : p.target;
       for (let axis = 0; axis < 3; axis++) {
         const target = base[axis] + (thread ? (thread.point[axis] - base[axis]) * pull : 0);
         p.position[axis] = advanceSpring(p.motion[axis], target, layer);

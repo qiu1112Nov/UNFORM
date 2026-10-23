@@ -1,4 +1,5 @@
-// Local-only preparation contract. A later translator consumes getTranslationInput(),
+import { TranslationJob } from './image-translation.js';
+// Local-only preparation contract. Translation consumes getTranslationInput(),
 // never the original File. Coordinates refer to the bounded, orientation-corrected source.
 export const FUSION = Object.freeze({ maxBytes: 20 * 1024 * 1024, sourceSize: 2048, outputSize: 512, maxZoom: 3 });
 const types = new Set(['image/jpeg', 'image/png', 'image/webp']);
@@ -65,9 +66,10 @@ export async function decodeLocalImage(file) {
   } finally { URL.revokeObjectURL(url); }
 }
 
-export function mountFusion({ flow, root }) {
+export function mountFusion({ flow, root, beforeCreate = () => true, particleCount = () => 850 }) {
   const $ = selector => root.querySelector(selector);
   const session = new FusionSession();
+  const job = new TranslationJob();
   const input = $('#fusion-file'), preview = $('#fusion-preview'), confirmed = $('#translate-preview');
   const message = $('#fusion-message');
   let pointer = null, uiRevision = 0;
@@ -88,7 +90,37 @@ export function mountFusion({ flow, root }) {
       ctx.drawImage(session.source.surface, rect.x, rect.y, rect.width, rect.height, 0, 0, preview.width, preview.height);
     }
   }
+  function resetTranslation() {
+    job.cancel(); $('#translate-create').disabled = true;
+    $('#translate-progress').value = 0;
+    $('#translation-details').textContent = '';
+    $('#translation-map').getContext('2d').clearRect(0, 0, 128, 128);
+  }
+  async function translate() {
+    resetTranslation();
+    const revision = job.revision + 1;
+    try {
+      const result = await job.run(session.getTranslationInput(), { count: particleCount(), progress(phase, fraction) {
+        if (flow.screen !== 'TRANSLATE') return;
+        $('#translate-progress').value = fraction;
+        $('#translate-status').textContent = `${Math.round(fraction * 100)}% / ${phase === 'READY' ? 'ANALYSIS COMPLETE · MATERIAL READY' : phase}`;
+      } });
+      if (!result || flow.screen !== 'TRANSLATE' || job.revision !== revision) return;
+      const f = result.features, ctx = $('#translation-map').getContext('2d'), n = f.resolution;
+      const pixels = ctx.createImageData(n, n);
+      for (let i = 0; i < n * n; i++) { const value = Math.round(Math.min(1, f.luma[i] * .65 + f.edges[i] * .8) * 255); pixels.data.set([value, value, value, 255], i * 4); }
+      const map = document.createElement('canvas'); map.width = map.height = n; map.getContext('2d').putImageData(pixels, 0, 0);
+      ctx.drawImage(map, 0, 0, 128, 128);
+      ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.arc(f.centroid.x * 128, f.centroid.y * 128, 5, 0, Math.PI * 2); ctx.stroke();
+      const distribution = Array.from(f.histogram, v => Math.round(v / (n * n) * 100)).join(' / ');
+      $('#translation-details').textContent = `64 × 64 analysis · brightness ${Math.round(f.mean * 100)}% · contrast ${Math.round(f.contrast * 100)}%\nDark → light bins (%): ${distribution}\nVisual center: ${Math.round(f.centroid.x * 100)}%, ${Math.round(f.centroid.y * 100)}% · circle on map\nContour tangent: ${(f.direction.angle * 180 / Math.PI).toFixed(0)}° · coherence ${Math.round(f.direction.confidence * 100)}%\n${f.lowContrast ? 'Low contrast: restrained geometry; no invented contours.' : 'Contour energy and luminance shape an octahedral volume.'}`;
+      $('#translate-create').disabled = false;
+    } catch (error) {
+      if (error.name !== 'AbortError' && job.revision === revision && flow.screen === 'TRANSLATE') $('#translate-status').textContent = error.message || 'Analysis failed. Edit the frame or retry.';
+    }
+  }
   function clear() {
+    resetTranslation();
     ++uiRevision; pointer = null;
     session.clear(); input.value = ''; message.textContent = 'Your image stays in this tab. Nothing is uploaded.';
     confirmed.getContext('2d').clearRect(0, 0, confirmed.width, confirmed.height);
@@ -133,12 +165,16 @@ export function mountFusion({ flow, root }) {
         return ctx.getImageData(0, 0, size, size);
       });
       pointer = null;
-      if (flow.translate(ready)) $('#translate-title').focus({ preventScroll: true });
+      if (flow.translate(ready)) { $('#translate-title').focus({ preventScroll: true }); translate(); }
     } catch { message.textContent = 'Could not prepare this image. Please choose another.'; }
   });
   $('#fusion-cancel').addEventListener('click', () => { clear(); flow.back(); $('#fusion-start').focus({ preventScroll: true }); });
   $('#translate-cancel').addEventListener('click', () => { clear(); flow.back(); $('#fusion-start').focus({ preventScroll: true }); });
-  $('#translate-edit').addEventListener('click', () => { flow.editImage(); sync(); $('#fusion-title').focus({ preventScroll: true }); });
+  $('#translate-edit').addEventListener('click', () => { resetTranslation(); flow.editImage(); sync(); $('#fusion-title').focus({ preventScroll: true }); });
+  $('#translate-regenerate').addEventListener('click', () => { if (flow.screen === 'TRANSLATE') translate(); });
+  $('#translate-create').addEventListener('click', () => {
+    if (flow.screen === 'TRANSLATE' && job.result && beforeCreate(job.result)) flow.createFusion(job.result);
+  });
   window.addEventListener('pagehide', () => {
     clear();
     if (flow.screen === 'IMPORT' || flow.screen === 'TRANSLATE') flow.back();

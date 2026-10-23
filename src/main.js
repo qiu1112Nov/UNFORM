@@ -71,6 +71,7 @@ if (field) {
     pause.setAttribute('aria-pressed', field.paused);
   };
   syncPause();
+  field.syncArtworkControls = () => { syncParameters(); syncPause(); syncMemory(); };
   if (field.reducedMotion) status.textContent = 'Reduced motion: artwork paused. Press play to animate.';
   pause.addEventListener('click', () => { field.paused = !field.paused; field.last = 0; field.quality.resetTiming(); syncPause(); });
   $('#reset').addEventListener('click', () => {
@@ -191,12 +192,14 @@ const flow = new OriginFlow({
     document.body.dataset.screen = screen;
     document.title = `UNFORM 4.0 — ${origin ? 'ORIGIN' : screen === 'CREATE' ? 'CREATE / GEOMETRY' : `FUSION / ${screen}`}`;
   },
-  enter(first) {
+  enter(first, path = 'GEOMETRY', material = null) {
     if (first) {
       initializeCreate();
       if (field) field.inputStartedAt = performance.now();
       else return;
-    } else {
+    }
+    field?.switchArtwork(path, material);
+    if (!first) {
       field?.setWorkspaceActive(true);
       camera?.resetGestureInput();
       if (field && (field.width !== innerWidth || field.height !== innerHeight)) field.resize();
@@ -204,8 +207,25 @@ const flow = new OriginFlow({
         : 'SCULPT / Your form is kept. Begin a new touch or enable the camera to continue.';
     }
     if (field) {
+      field.syncArtworkControls?.();
+      document.body.dataset.mode = field.mode;
+      document.body.dataset.artwork = path;
+      document.querySelectorAll('[data-mode]').forEach(button => button.setAttribute('aria-pressed', button.dataset.mode === field.mode));
+      document.querySelectorAll('.form-button').forEach(button => { button.classList.toggle('active', button.dataset.form === field.form); button.setAttribute('aria-pressed', button.dataset.form === field.form); });
+      document.querySelectorAll('.form-button, #dispersion, #reset').forEach(control => { control.disabled = field.mode === 'VIEW'; });
+      $('#undo').disabled = field.mode !== 'SCULPT' || !field.memory.commits.length;
+      $('#dispersion').value = Math.round(field.dispersion * 100); $('#dispersion-value').value = `${Math.round(field.dispersion * 100)}%`;
+      $('#form-caption').textContent = field.form === 'octahedron' ? '06 VERTICES / 12 EDGES / 08 FACES' : field.form.toUpperCase();
+      $('#pause').setAttribute('aria-label', field.paused ? 'Play animation' : 'Pause animation');
+      $('#pause').setAttribute('aria-pressed', field.paused);
+      $('.masthead-caption').innerHTML = `SCULPTURES IN MOTION<br />CREATE / ${path}`;
+      $('.eyebrow').textContent = `CREATE / ${path} — ${path === 'FUSION' ? 'IMAGE MATERIAL / 002' : 'OCTAHEDRON / 001'}`;
+      document.title = `UNFORM 4.0 — CREATE / ${path}`;
+      status.textContent = field.mode === 'VIEW' ? 'VIEW / Drag to observe; switch to SCULPT to shape.' : 'SCULPT / Begin a new touch. Slow drag to imprint; swipe to scatter.';
+      $('#fusion-resume').hidden = path !== 'FUSION' && !field.artworks.has('FUSION');
       $('#geometry-action').textContent = 'RESUME CREATE →';
       $('#origin-draft').hidden = false;
+      $('#origin-draft').textContent = path === 'FUSION' || field.artworks.has('FUSION') ? 'GEOMETRY and FUSION keep separate forms in this tab. Choose either to resume.' : 'Your current form is kept in this tab. Resume with GEOMETRY.';
       document.querySelector('button[data-mode][aria-pressed="true"]').focus({ preventScroll: true });
     }
   },
@@ -224,7 +244,11 @@ const flow = new OriginFlow({
 $('#geometry-start').addEventListener('click', () => flow.choose('GEOMETRY'));
 document.querySelectorAll('[data-origin-back]').forEach(button => button.addEventListener('click', () => flow.back()));
 
-mountFusion({ flow, root: document });
+mountFusion({ flow, root: document, particleCount: () => field?.poolCount ?? ParticleField.capacity(), beforeCreate: material => {
+  const previous = field?.artworkName === 'FUSION' ? field : field?.artworks.get('FUSION');
+  return !previous || previous.material === material || window.confirm('Replace the previous FUSION sculpture and its imprints? Your GEOMETRY form is kept.');
+} });
+$('#fusion-resume').addEventListener('click', () => flow.resumeFusion());
 $('#fusion-start').addEventListener('click', () => {
   if (flow.choose('FUSION')) $('#fusion-title').focus({ preventScroll: true });
 });
