@@ -562,6 +562,24 @@ export class ParticleField {
     destination.y = this.originY - point[1] * this.scale * perspective;
   }
 
+  densityFacetOpacity(ia, ib, ic) {
+    // Double-sided, fixed camera-space light. Reuse the live shared node
+    // positions; no extra mesh, normals buffer, lights or per-frame objects.
+    const a=this.points[ia].world,b=this.points[ib].world,c=this.points[ic].world;
+    const ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2],vx=c[0]-a[0],vy=c[1]-a[1],vz=c[2]-a[2];
+    const nx=uy*vz-uz*vy,ny=uz*vx-ux*vz,nz=ux*vy-uy*vx,length=Math.hypot(nx,ny,nz);
+    if(length<1e-8)return 0;
+    let x=nx*this.yawCos+nz*this.yawSin,z=-nx*this.yawSin+nz*this.yawCos;
+    let y=ny*this.pitchCos-z*this.pitchSin;
+    z=ny*this.pitchSin+z*this.pitchCos;
+    if(this.viewRotated){
+      const rx=x*this.viewYawCos+z*this.viewYawSin,rz=-x*this.viewYawSin+z*this.viewYawCos;
+      z=y*this.viewPitchSin+rz*this.viewPitchCos;
+      y=y*this.viewPitchCos-rz*this.viewPitchSin;x=rx;
+    }
+    return .018+.022*Math.min(1,Math.abs(x*.35+y*.45+z*.82)/length);
+  }
+
   drawWeave() {
     const ctx = this.ctx;
     const coherence = 1 - this.impulse * this.dispersion;
@@ -590,7 +608,8 @@ export class ParticleField {
       }
       if (strength < 0.88) continue;
       const a = this.nodeScreens[ia], b = this.nodeScreens[ib], c = this.nodeScreens[ic];
-      ctx.fillStyle = `rgba(255,255,255,${(strength - 0.88) * 0.22 * coherence})`;
+      const opacity=density?this.densityFacetOpacity(ia,ib,ic):(strength-.88)*.22;
+      ctx.fillStyle = `rgba(255,255,255,${opacity * coherence})`;
       ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.lineTo(c.x, c.y); ctx.closePath(); ctx.fill(); filled++;
     }
     const edgeActivation = this.form === 'octahedron' ? clamp(this.fragments.states[1].value) : this.impulse;
@@ -605,7 +624,8 @@ export class ParticleField {
       const intact = 1 - Math.max(this.weave.damage[ia], this.weave.damage[ib]);
       const visibility = density ? Math.min(this.budget.opacity[ia], this.budget.opacity[ib]) : 1;
       if (visibility < .001) continue;
-      const base = this.mesh.boundary[i] ? (density ? (.08 + this.mesh.linkWeights[i] * .09) : .12) * intact * visibility : 0;
+      const depthCue=density?clamp(.9+(a.depth+b.depth)*.3,.6,1.25):1;
+      const base = this.mesh.boundary[i] ? (density ? (.08 + this.mesh.linkWeights[i] * .09)*depthCue : .12) * intact * visibility : 0;
       if ((strength < 0.025 && base < 0.005) || integrity < 0.025) continue;
       if (this.mobile) {
         const opacity = (base + strength * 0.43 * visibility) * integrity;

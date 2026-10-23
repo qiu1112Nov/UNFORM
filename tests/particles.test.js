@@ -727,3 +727,24 @@ test('reference lines are excluded from rendering even when weave charge would m
  field.mesh.primary.fill(true);field.weave.charge.fill(1);strokes=0;field.drawWeave();
  assert.equal(strokes,0,'reference edges are not faded lines: they are not submitted at all');
 });
+
+test('FUSION depth projects with parallax and sparse facet lighting follows VIEW and live shared nodes',async t=>{
+ const {TranslationJob}=await import('../src/image-translation.js');
+ const {densityImage}=await import('./helpers/density-fixtures.js');
+ const field=createField(t),m=await new TranslationJob().run(densityImage('corner'),{yieldTask:async()=>{}});
+ field.switchArtwork('FUSION',m);
+ const world=field.points.map(p=>[...p.world]),screen=field.points.map(p=>[p.x,p.y,p.depth]);
+ const triangle=m.mesh.triangles[0],before=field.densityFacetOpacity(...triangle);
+ field.viewYaw=.85;field.viewPitch=.25;field.projectAll();
+ const after=field.densityFacetOpacity(...triangle);
+ assert.deepEqual(field.points.map(p=>[...p.world]),world);
+ assert.ok(field.points.some((p,i)=>Math.abs(p.x-screen[i][0])>20&&Math.abs(p.depth-screen[i][2])>.1),'rotation reveals actual scene depth');
+ assert.ok(Math.abs(before-after)>.0001,'facet shading changes with observation direction');
+ assert.ok(before>=.018&&before<=.04&&after>=.018&&after<=.04);
+ const c=field.points[triangle[2]];c.world[2]+=.1;
+ assert.notEqual(field.densityFacetOpacity(...triangle),after,'facet normal uses live sculpture nodes, not the undeformed base');
+ assert.deepEqual(c.home,m.cached[triangle[2]].point);
+ field.viewRotated=false;
+ const front={},back={};field.projectScene(.3,.2,.4,front);field.projectScene(.3,.2,-.4,back);
+ assert.ok(front.x-field.centerX>back.x-field.centerX,'perspective distinguishes front and back at equal XY');
+});

@@ -8,6 +8,8 @@ export const DENSITY_FIELD = Object.freeze({
   desktop: Object.freeze({ lines: 1600, faces: 28, glyphs: 48 }),
   referenceMix: .74, depthMix: .86, ridgeFraction: .2, ridgePull: .42,
   ridgeMaxOffset: .15, faceAlignment: .86, maxRadius: 1.55,
+  peripheralDepth: .55, depthLinkFraction: .12, depthLinkSpan: .075,
+  depthFaceSpan: .065,
   degree: 4, candidates: 48, faceAreaRatio: .035, isolatedFraction: .12,
 });
 const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
@@ -169,9 +171,14 @@ export class DensityMaterial {
     const guide=this.base.embedImage(u,v,depth);
     const blend=DENSITY_FIELD.referenceMix;
     const relief=.88+.12*f.density[cell];
+    // The octahedral roof approaches zero at contour-heavy peripheral UVs.
+    // Add bounded local thickness there, not a global Z multiplier or box floor.
+    const roof=Math.abs(this.base.embedImage(u,v,1)[2]);
+    const support=f.flat ? .3 : .35+.65*f.contour[cell];
+    const localDepth=depth*thickness*DENSITY_FIELD.peripheralDepth*support*(1-roof)**2;
     return [image[0]*(1-blend)+guide[0]*blend,
       image[1]*(1-blend)+guide[1]*blend,
-      image[2]*(1-DENSITY_FIELD.depthMix)+guide[2]*DENSITY_FIELD.depthMix*relief];
+      image[2]*(1-DENSITY_FIELD.depthMix)+guide[2]*DENSITY_FIELD.depthMix*relief+localDepth];
   }
   deform(point, u, v, cell) {
     const f=this.field, strength=f.flat?0:f.contour[cell], angle=f.tangent[cell];
@@ -246,7 +253,7 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
   const cells = new Map(), size = .16, key = (x, y, z) => `${x},${y},${z}`;
   nodes.forEach((p, i) => { const k = key(...p.map(v => Math.floor(v / size))); if (!cells.has(k)) cells.set(k, []); cells.get(k).push(i); });
   const pairs = new Set(), incident = new Int32Array(nodes.length).fill(-1), primary=[];
-  let checked = 0, totalLength = 0;
+  let checked = 0, totalLength = 0, depthLinks=0;
   for (let i = 0; i < nodes.length && links.length < limits.lines; i++) {
     check(signal);
     if (random(i, 97) < DENSITY_FIELD.isolatedFraction) continue;
@@ -268,23 +275,32 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
         }
         const b = nodes[j], vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2], d = Math.hypot(vx, vy, vz);
         const radius = .11 + (1 - Math.min(p.density, q.density)) * .12;
-        if (d < .018 || d > radius || Math.abs(vz) > .13) continue;
+        if (d < .018 || d > radius) continue;
         const imageAlignment = Math.abs((vx * Math.cos(p.tangent) + vy * Math.sin(p.tangent)) / d);
         const direction=p.referenceDirection;
         const ridgeAlignment=direction?Math.abs((vx*direction[0]+vy*direction[1]+vz*direction[2])/(d*Math.hypot(...direction))):0;
         const directional=(p.ridge||q.ridge)&&p.referenceEdge===q.referenceEdge;
+        const crossDepth=directional&&Math.abs(vz)>=DENSITY_FIELD.depthLinkSpan&&ridgeAlignment>.65;
+        if(Math.abs(vz)>.13&&!crossDepth)continue;
         const alignment=directional?Math.max(imageAlignment,ridgeAlignment):imageAlignment;
         if (p.kind === 'edge' && p.coherence > .5 && alignment < .28) continue;
-        candidates.push({ j, d, score: d / (.6 + alignment * .4 + (directional?ridgeAlignment*.5:0)) });
+        candidates.push({ j, d, crossDepth, score: d / (.6 + alignment * .4 + (directional?ridgeAlignment*.5:0)) });
       }
     }
     candidates.sort((a, b) => a.score - b.score);
+    // Prioritize one local depth connection per supported node until 12% of
+    // the line budget is depth-connected; nearest links fill the other slots.
+    if(depthLinks<limits.lines*DENSITY_FIELD.depthLinkFraction){
+      const index=candidates.findIndex(c=>c.crossDepth);
+      if(index>0)candidates.unshift(...candidates.splice(index,1));
+    }
     for (const c of candidates) {
       if (adjacency[i].length >= DENSITY_FIELD.degree || links.length >= limits.lines) break;
       const j = c.j; if (adjacency[j].length >= DENSITY_FIELD.degree) continue;
       const pair = `${Math.min(i,j)},${Math.max(i,j)}`; if (pairs.has(pair)) continue;
       pairs.add(pair); incident[i] = incident[j] = links.length;
       links.push([i,j]); primary.push(false); linkWeights.push(.5 + Math.min(samples[i].density, samples[j].density) * .5);
+      if(c.crossDepth)depthLinks++;
       adjacency[i].push(j); adjacency[j].push(i); totalLength += c.d;
     }
     if (i % 64 === 63) { progress('CONNECTIONS', .92 + .05 * i / nodes.length); await yieldTask(); }
@@ -293,24 +309,33 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
   const footprint = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
   const normals=reference?faceNormals(reference):null;
   let areaSum = 0;
-  for (let i = 0; i < nodes.length && triangles.length < limits.faces; i++) {
+  const seenFaces=new Set();
+  // Prefer a few genuinely slanted patches before filling with other valid
+  // local triangles. Both passes share the original count and area budgets.
+  for(let pass=0;pass<2;pass++){
+   const faceLimit=pass===0?Math.ceil(limits.faces/2):limits.faces;
+   for (let i = 0; i < nodes.length && triangles.length < faceLimit; i++) {
     check(signal);
     for (const j of adjacency[i]) for (const k of adjacency[j]) {
-      if (triangles.length >= limits.faces || j <= i || k <= j || !adjacency[i].includes(k)) continue;
+      if (triangles.length >= faceLimit || j <= i || k <= j || !adjacency[i].includes(k)) continue;
+      const faceKey=`${i},${j},${k}`;
+      if(seenFaces.has(faceKey))continue;
       const p = samples[i], q = samples[j], r = samples[k], density = (p.density + q.density + r.density) / 3;
       const coherence = (p.coherence + q.coherence + r.coherence) / 3;
       const direction = Math.abs(Math.cos(p.tangent - q.tangent)) * Math.abs(Math.cos(p.tangent - r.tangent));
       if (density < .18 || density > .9 || coherence < .22 || direction < .4) continue;
       const a = nodes[i], b = nodes[j], c = nodes[k], ab = b.map((v, d) => v - a[d]), ac = c.map((v, d) => v - a[d]);
+      if(pass===0&&Math.max(a[2],b[2],c[2])-Math.min(a[2],b[2],c[2])<DENSITY_FIELD.depthFaceSpan)continue;
       const normal=[ab[1]*ac[2]-ab[2]*ac[1], ab[2]*ac[0]-ab[0]*ac[2], ab[0]*ac[1]-ab[1]*ac[0]];
       const normalLength=Math.hypot(...normal),area=normalLength/2;
       if(normals&&!normals.some(n=>Math.abs(n.reduce((sum,v,a)=>sum+v*normal[a],0))/normalLength>=DENSITY_FIELD.faceAlignment))continue;
       const longest = Math.max(Math.hypot(...ab), Math.hypot(...ac), Math.hypot(...b.map((v,d)=>v-c[d])));
       if (area < .0003 || area > .008 || area / longest ** 2 < .12 || areaSum + area > footprint * DENSITY_FIELD.faceAreaRatio) continue;
-      triangles.push([i,j,k]); faceWeights.push(coherence * direction); areaSum += area;
-      if (triangles.length >= limits.faces) break;
+      triangles.push([i,j,k]); seenFaces.add(faceKey);faceWeights.push(coherence * direction); areaSum += area;
+      if (triangles.length >= faceLimit) break;
     }
     if (i % 128 === 127) { await yieldTask(); check(signal); }
+   }
   }
   progress('TOPOLOGY READY', .99);
   return { nodes, links, adjacency, triangles, boundary: links.map(() => true), linkWeights, faceWeights, incident,
