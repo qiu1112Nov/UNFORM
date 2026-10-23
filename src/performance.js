@@ -16,7 +16,7 @@ export class AdaptiveQuality {
     this.recognitionPriority = false;
   }
   get count() { return this.mobile ? MOBILE_PERFORMANCE.tiers[this.level] : 1900; }
-  observe(intervalMs, updateMs, drawMs, inferenceMs = null) {
+  observe(intervalMs, updateMs, drawMs, inferenceMs = null, adapt = true) {
     this.updateMs = updateMs; this.drawMs = drawMs; this.inferenceMs = inferenceMs;
     if (!Number.isFinite(intervalMs) || intervalMs <= 0 || intervalMs > 250) return false;
     const dt = intervalMs / 1000, alpha = 1 - Math.exp(-dt);
@@ -24,7 +24,7 @@ export class AdaptiveQuality {
     this.frameEMA += (intervalMs - this.frameEMA) * alpha;
     this.workEMA += (updateMs + drawMs - this.workEMA) * alpha;
     this.fps = 1000 / this.frameEMA;
-    if (!this.mobile || this.age < MOBILE_PERFORMANCE.warmupSeconds) return false;
+    if (!adapt || !this.mobile || this.age < MOBILE_PERFORMANCE.warmupSeconds) return false;
     const slow = (!this.recognitionPriority && this.frameEMA > MOBILE_PERFORMANCE.slowFrameMs) || this.workEMA > MOBILE_PERFORMANCE.slowWorkMs;
     const fast = this.frameEMA < MOBILE_PERFORMANCE.fastFrameMs && this.workEMA < MOBILE_PERFORMANCE.fastWorkMs;
     this.slowAge = slow ? this.slowAge + dt : 0;
@@ -47,15 +47,23 @@ export class ParticleBudget {
     this.points = points; this.selected = new Uint8Array(points.length);
     this.opacity = new Float32Array(points.length);
     this.indices = new Uint16Array(points.length); this.length = 0;
+    this.imageDriven = points.some(p => p.density !== undefined);
+    this.pinned = [];
     this.groups = [[], [], [], []];
-    points.forEach((p, i) => this.groups[p.kind === 'edge' ? (p.flow ? 0 : 1) : p.kind === 'surface' ? 2 : 3].push(i));
+    points.forEach((p, i) => { if (p.pinned) this.pinned.push(i); else this.groups[p.kind === 'edge' ? (p.flow ? 0 : 1) : p.kind === 'surface' ? 2 : 3].push(i); });
     for (const group of this.groups) group.sort((a, b) => ((a * 613) % 997) - ((b * 613) % 997));
     this.setCount(count, true);
   }
   setCount(count, initial = false) {
     this.selected.fill(0);
     const edge = Math.round(count * 0.35), surface = Math.round(count * 0.45), flow = Math.round(count * 0.12);
-    const sizes = [flow, edge - flow, surface, count - edge - surface];
+    for (const i of this.pinned) this.selected[i] = 1;
+    const available = count - this.pinned.length;
+    const sizes = this.imageDriven ? this.groups.map(group => Math.floor(group.length * available / (this.points.length - this.pinned.length))) : [flow, edge - flow, surface, count - edge - surface];
+    if (this.imageDriven) {
+      let remaining = available - sizes.reduce((a,b) => a+b, 0);
+      for (let g = 0; remaining > 0; g = (g + 1) % 4) if (sizes[g] < this.groups[g].length) { sizes[g]++; remaining--; }
+    }
     for (let group = 0; group < 4; group++) for (let j = 0; j < sizes[group]; j++) this.selected[this.groups[group][j]] = 1;
     this.length = 0;
     for (let i = 0; i < this.points.length; i++) {

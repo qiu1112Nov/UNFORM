@@ -4,31 +4,111 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="theme-color" content="#101111" />
-    <meta name="description" content="UNFORM 3.2.3 — DIRECT RESPONSE. Adaptive mobile quality and off-thread hand tracking for the FLOW STATE octahedron. 55% deconstruction, 65% inertia." />
-    <title>UNFORM 3.2.3 — DIRECT RESPONSE</title>
+    <meta name="description" content="UNFORM — shape generative material through movement. Begin with geometry, sculpt a particle form, and explore it in three dimensions." />
+    <title>UNFORM 4.0 — ORIGIN</title>
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
   </head>
-  <body>
-    <canvas id="particle-field" aria-label="Three-dimensional octahedron particle sculpture. Hold to weave local connections, swipe to break them. Alternative forms and motion controls are available below."></canvas>
-    <div class="interface">
+  <body data-screen="ORIGIN">
+    <section id="origin-screen" class="origin-screen" aria-labelledby="origin-title">
+      <header class="origin-header"><span class="wordmark">UNFORM<span class="wordmark-dot">®</span></span><span>ORIGIN / 01</span></header>
+      <div class="origin-content">
+        <p class="origin-kicker">A MATERIAL WAITING FOR MOVEMENT.</p>
+        <h1 id="origin-title" tabindex="-1">HOW WILL YOUR<br />FORM BEGIN?</h1>
+        <p class="origin-description">Choose a starting point. Shape what comes next.</p>
+        <div class="origin-options">
+          <button id="geometry-start" type="button" class="origin-option" aria-describedby="geometry-description">
+            <span class="origin-option-top">01 / AVAILABLE <span aria-hidden="true">↗</span></span>
+            <span class="origin-symbol" aria-hidden="true">◇</span>
+            <strong>GEOMETRY</strong>
+            <span id="geometry-description">Begin with a particle octahedron.<br />Sculpt through touch and movement.</span>
+            <span class="origin-action" id="geometry-action">ENTER CREATE →</span>
+          </button>
+          <button id="fusion-start" type="button" class="origin-option" aria-describedby="fusion-description">
+            <span class="origin-option-top">02 / LOCAL IMAGE</span>
+            <span class="origin-symbol" aria-hidden="true">⊞</span>
+            <strong>FUSION</strong>
+            <span id="fusion-description">Begin with your own image.<br />Prepare a frame for translation.</span>
+            <span class="origin-action">IMPORT IMAGE →</span>
+          </button>
+        </div>
+        <button type="button" id="fusion-resume" class="fusion-secondary" hidden>RESUME FUSION →</button>
+        <p id="origin-draft" class="origin-draft" hidden>Your current form is kept in this tab. Resume with GEOMETRY.</p>
+      </div>
+      <footer class="origin-footer"><span>POINTS. LINES. POSSIBILITIES.</span><span>UNFORM / 4.0</span></footer>
+    </section>
+    <section id="fusion-screen" class="fusion-screen" hidden aria-labelledby="fusion-title">
+      <header class="origin-header"><span class="wordmark">UNFORM<span class="wordmark-dot">®</span></span><span>FUSION / 02</span></header>
+      <main class="fusion-content">
+        <p class="origin-kicker">AN IMAGE. A STARTING POINT.</p>
+        <h1 id="fusion-title" tabindex="-1">FRAME YOUR MATERIAL.</h1>
+        <p class="origin-description">Choose an image, then frame a square crop. Translation comes next.</p>
+        <div class="fusion-layout">
+          <div class="fusion-frame"><p id="fusion-empty">YOUR IMAGE BEGINS HERE</p><canvas id="fusion-preview" width="512" height="512" hidden aria-label="Square image crop preview. Drag to reposition, or use the position sliders below."></canvas><span class="crop-cross" aria-hidden="true">+</span></div>
+          <div class="fusion-tools">
+            <label class="fusion-file-button" for="fusion-file">CHOOSE / RESELECT IMAGE<input id="fusion-file" type="file" accept="image/jpeg,image/png,image/webp" /></label>
+            <p class="fusion-note">JPEG · PNG · WEBP / UP TO 20 MB<br />HEIC: export as JPEG before choosing.</p>
+            <label for="crop-zoom">ZOOM<input id="crop-zoom" type="range" min="1" max="3" step="0.01" value="1" disabled /></label>
+            <label for="crop-x">HORIZONTAL POSITION<input id="crop-x" type="range" min="0" max="1" step="0.005" value="0.5" disabled /></label>
+            <label for="crop-y">VERTICAL POSITION<input id="crop-y" type="range" min="0" max="1" step="0.005" value="0.5" disabled /></label>
+            <p id="fusion-message" class="fusion-note" role="status" aria-live="polite">Your image stays in this tab. Nothing is uploaded.</p>
+            <button type="button" id="fusion-confirm" class="fusion-primary" disabled>CONFIRM IMAGE →</button>
+            <button type="button" id="fusion-cancel" class="fusion-secondary">CANCEL / BACK TO ORIGIN</button>
+          </div>
+        </div>
+      </main>
+      <footer class="origin-footer"><span>LOCAL PROCESSING ONLY</span><span>UNFORM / 4.0</span></footer>
+    </section>
+    <section id="translate-screen" class="fusion-screen" hidden aria-labelledby="translate-title">
+      <header class="origin-header"><span class="wordmark">UNFORM<span class="wordmark-dot">®</span></span><span>FUSION / TRANSLATE</span></header>
+      <main class="fusion-content">
+        <p class="origin-kicker">FRAME CONFIRMED / FUSION 1.0</p>
+        <h1 id="translate-title" tabindex="-1">TRANSLATE</h1>
+        <div class="fusion-layout">
+          <div class="fusion-frame"><canvas id="translate-preview" width="512" height="512" aria-label="Confirmed image crop"></canvas></div>
+          <div class="fusion-tools">
+            <p class="origin-description">IMAGE → MATERIAL</p>
+            <progress id="translate-progress" max="1" value="0" aria-label="Image analysis progress"></progress>
+            <p id="translate-status" class="fusion-note" role="status" aria-live="polite">Ready to analyze locally.</p>
+            <canvas id="translation-map" width="128" height="128" aria-label="Density field preview; circle marks structure-weighted visual center"></canvas>
+            <p id="translation-details" class="fusion-note"></p>
+            <button type="button" id="translate-create" class="fusion-primary" disabled>ENTER CREATE / VIEW →</button>
+            <button type="button" id="translate-regenerate" class="fusion-secondary">REGENERATE</button>
+            <p class="fusion-note">Your image shapes density, local connections and sparse facets. Geometry guides the space without adding a preset frame. This is an image interpretation, not object recognition.</p>
+            <p class="fusion-note">Your GEOMETRY artwork remains unchanged. Your image and generated material stay only in this tab; refreshing loses them.</p>
+            <button type="button" id="translate-edit" class="fusion-primary">EDIT FRAME</button>
+            <button type="button" id="translate-cancel" class="fusion-secondary">CANCEL / BACK TO ORIGIN</button>
+          </div>
+        </div>
+      </main>
+      <footer class="origin-footer"><span>LOCAL PROCESSING ONLY</span><span>UNFORM / 4.0</span></footer>
+    </section>
+    <canvas hidden id="particle-field" aria-label="Three-dimensional octahedron particle sculpture. Hold to weave local connections, swipe to break them. Alternative forms and motion controls are available below."></canvas>
+    <div id="create-screen" class="interface" hidden>
       <header class="masthead">
-        <a class="wordmark" href="./" aria-label="UNFORM home">UNFORM<span class="wordmark-dot">®</span></a>
-        <span class="masthead-caption">SCULPTURES IN MOTION<br />VOLUME 03 — STUDY 001</span>
+        <button type="button" class="wordmark" data-origin-back aria-label="Return to ORIGIN">UNFORM<span class="wordmark-dot">®</span></button>
+        <span class="masthead-caption">SCULPTURES IN MOTION<br />CREATE / GEOMETRY</span>
         <button class="camera-button" id="camera-toggle" aria-pressed="false"><span class="camera-icon" aria-hidden="true"></span><span id="camera-label">Enable camera</span><svg class="button-arrow" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" aria-hidden="true"><path d="M5 19 19 5M5 5h14v14"/></svg></button>
       </header>
 
       <main>
         <div class="intro">
-          <div class="eyebrow"><span class="live-dot"></span> UNFORM 3.2.3 — OCTAHEDRON / 001</div>
+          <div class="eyebrow"><span class="live-dot"></span> CREATE / GEOMETRY — OCTAHEDRON / 001</div>
           <h1>FLOW <span>STATE</span></h1>
           <p>A quiet structure. A continuous becoming.<br /><small id="motion-profile"></small></p>
+          <div class="interaction-tools">
+            <div class="mode-switch" role="group" aria-label="Interaction mode">
+              <button type="button" data-mode="SCULPT" aria-pressed="true">SCULPT</button>
+              <button type="button" data-mode="VIEW" aria-pressed="false">VIEW</button>
+            </div>
           <button class="text-button" id="guide-toggle" aria-expanded="false" aria-controls="guide"><span class="circle-plus" aria-hidden="true">+</span> HOW TO INTERACT</button>
+          </div>
         </div>
 
         <div class="field-label" aria-hidden="true"><span class="crosshair">+</span><span id="form-caption">06 VERTICES / 12 EDGES / 08 FACES</span></div>
 
         <aside class="guide" id="guide" hidden>
           <div class="guide-heading"><span>A LITTLE MOVEMENT GOES A LONG WAY.</span><button id="guide-close" aria-label="Close interaction guide">×</button></div>
+          <div><b>00 / SCULPT & VIEW</b><p>SCULPT: drag slowly, then release to remember a local imprint. Swipe quickly to scatter and naturally reform without saving. A brief pause shows a subtle ring; waiting is optional. Tiny touches do not leave marks. Undo removes the last imprint; Restore clears all imprints. VIEW holds the current form: drag with one finger or the mouse to look around. Return to SCULPT and begin a new touch or hand gesture to continue.</p></div>
           <div><b>01 / WEAVE & UNRAVEL</b><p>Touch or hold near the sculpture. Particles gather into dashes, then fine threads travel across its triangular structure. Hold longer to reveal a few translucent facets. Swipe quickly to break nearby threads; particles gently return. Use two fingers to spread or gather.</p></div>
           <div><b>02 / FLOW · FRAGMENT · TRACE</b><p>A small stream of particles travels along the edges. With the camera enabled, an open palm unfolds vertices, edges, then the interior; a fist rebuilds in reverse. Move your hand quickly for sparse local trails and a gentle swirl. Trails fade when you become still.</p></div>
           <div><b>03 / MAKE IT YOURS</b><p>Hybrid motion preserves geometric anchors while fragments flow. Deconstruction sets the effect strength; an open palm or two fingers activates it. Lines, Circle and Grid remain available. Space pauses and 1–4 switches forms when no control is focused. Press play to weave when paused.</p></div>
@@ -40,7 +120,7 @@
           <span id="hand-status">LOOKING FOR A HAND</span>
         </div>
 
-        <div class="status-line" role="status" aria-live="polite" id="status">Hold to weave. Swipe to unravel. Release to reform.</div>
+        <div class="status-line" role="status" aria-live="polite" id="status">Slow drag to shape. Release to imprint. Swipe to scatter.</div>
 
         <section class="control-dock" aria-label="Artwork controls">
           <div class="form-controls"><span class="control-label">FORM</span><div class="segmented" role="group" aria-label="Particle form">
@@ -50,11 +130,11 @@
             <button class="form-button" data-form="grid" aria-pressed="false"><span aria-hidden="true">⊞</span> Grid</button>
           </div></div>
           <div class="dispersion-control"><label class="control-label" for="dispersion">DECONSTRUCTION <output id="dispersion-value" for="dispersion"></output></label><input type="range" id="dispersion" min="0" max="100" /></div>
-          <div class="play-controls"><button class="icon-button" id="reset" aria-label="Reset artwork" title="Reset artwork"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 9a8 8 0 1 1 0 7M4 3v6h6"/></svg></button><button class="icon-button" id="pause" aria-label="Pause animation" aria-pressed="false" title="Pause animation"></button></div>
+          <div class="play-controls"><button class="icon-button" id="undo" aria-label="Undo last imprint" title="Undo last imprint" disabled>↶</button><button class="icon-button" id="reset" aria-label="Restore original form" title="Restore original form"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M4 9a8 8 0 1 1 0 7M4 3v6h6"/></svg></button><button class="icon-button" id="pause" aria-label="Pause animation" aria-pressed="false" title="Pause animation"></button></div>
         </section>
       </main>
 
-      <footer><span>OCTAHEDRON / 001</span><span class="footer-center"><span class="live-dot"></span><span id="input-mode">POINTER MODE</span></span><span>LESS FORM. MORE FEELING. <span class="footer-cross">+</span></span></footer>
+      <footer><button type="button" class="text-button" data-origin-back>← ORIGIN</button><span class="footer-center"><span class="live-dot"></span><span id="input-mode">POINTER MODE</span></span><span>LESS FORM. MORE FEELING. <span class="footer-cross">+</span></span></footer>
     </div>
     <script type="module" src="/src/main.js"></script>
   </body>

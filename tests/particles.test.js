@@ -26,6 +26,175 @@ function createField(t, { width = 390, context: providedContext } = {}) {
 
 const visiblePoints = field => Array.from(field.budget.indices.subarray(0, field.budget.length), index => field.points[index]);
 
+function sculptDrag(field, { hold = 0.1 } = {}) {
+  const start = visiblePoints(field).find(p => p.kind === 'surface');
+  field.pointerDown(91, start.x, start.y, 0);
+  assert.ok(field.memory.sessions.has(91));
+  for (let i = 1; i <= 5; i++) field.pointerMove(91, start.x + i * 5, start.y + i, i * 100);
+  for (let i = 0; i < Math.round(hold * 60); i++) field.update(1 / 60, 600 + i * 1000 / 60);
+  return field.memory.sessions.get(91);
+}
+
+test('mobile drag commits on release without a pause and survives elastic recovery', t => {
+  const field = createField(t), original = field.points.map(p => [...p.home]);
+  const session = sculptDrag(field);
+  assert.equal(field.memory.commits.length, 0);
+  field.pointerUp(91); field.weave.clear();
+  assert.equal(field.memory.commits.length, 1);
+  const saved = JSON.stringify(field.memory.commits);
+  for (let i = 0; i < 400; i++) field.update(1 / 60, 4000 + i * 1000 / 60);
+  assert.equal(JSON.stringify(field.memory.commits), saved);
+  const result = field.memory.deform(session.anchor, new Float64Array(3));
+  assert.ok(Math.hypot(...result.map((v, a) => v - session.anchor[a])) > 0.04);
+  assert.deepEqual(field.points.map(p => p.home), original);
+  assert.ok(field.points.every(p => p.target.every((v, a) => v === p.home[a])));
+});
+
+test('release before the next animation frame still remembers effective mobile shaping', t => {
+  const field = createField(t); sculptDrag(field, { hold: 0 });
+  assert.equal(field.memory.commits.length, 0); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 1);
+  for (let i = 0; i < 240; i++) field.update(1 / 60);
+  assert.equal(field.memory.commits.length, 1);
+  assert.ok(field.memory.commits[0].offset.some(v => Math.abs(v) > 0.03));
+});
+
+test('Undo is available on release while the renderer acknowledges success only after local rest', t => {
+  const field = createField(t), events = [];
+  field.onMemoryChange = event => events.push(event);
+  sculptDrag(field); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 1); assert.ok(events.includes('COMMIT'));
+  assert.ok(!events.includes('SETTLED'));
+  for (let i = 0; i < 120; i++) field.update(1 / 60);
+  assert.deepEqual(events.filter(e => e === 'SETTLED' || e === 'CLEAR'), ['SETTLED', 'CLEAR']);
+  // Undoing a subsequent release before it settles cannot show a stale success.
+  sculptDrag(field); field.pointerUp(91); field.undoImprint(); events.length = 0;
+  for (let i = 0; i < 120; i++) field.update(1 / 60);
+  assert.equal(events.includes('SETTLED'), false);
+});
+
+test('pause feedback draws one sparse ring, expires, and cannot save while held', t => {
+  let rings = 0;
+  const context = new Proxy({}, { get: (_, key) => key === 'arc'
+    ? (x, y, radius) => { if (radius >= 12 && radius <= 24) rings++; } : () => {} });
+  const field = createField(t, { context }); sculptDrag(field, { hold: 0.6 });
+  rings = 0; field.draw(); assert.equal(rings, 1); assert.equal(field.memory.commits.length, 0);
+  for (let i = 0; i < 60; i++) field.update(1 / 60);
+  rings = 0; field.draw(); assert.equal(rings, 0); assert.equal(field.memory.commits.length, 0);
+  field.pointerUp(91); assert.equal(field.memory.commits.length, 1);
+});
+
+test('multitouch cannot submit either finger, including the last remaining finger', t => {
+  const field = createField(t); sculptDrag(field, { hold: 0.1 });
+  const p = visiblePoints(field)[10]; field.pointerDown(92, p.x, p.y, 800);
+  field.pointerMove(92, p.x + 25, p.y, 900); field.pointerUp(92);
+  const first = field.pointers.get(91); field.pointerMove(91, first.x + 20, first.y, 1000);
+  field.update(0.1, 1100); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 0);
+});
+
+test('ORIGIN during an unfinished drag cancels release submission without resetting existing history', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const history = JSON.stringify(field.memory.commits); sculptDrag(field, { hold: 0.6 });
+  field.setWorkspaceActive(false, 3000); field.pointerUp(91);
+  field.setWorkspaceActive(true, 4000); field.update(0.1, 4100);
+  assert.equal(JSON.stringify(field.memory.commits), history);
+});
+
+test('camera gesture updates do not create or duplicate pointer imprint history', t => {
+  const field = createField(t);
+  for (let i = 0; i < 100; i++) {
+    field.setHand({ x: 0.5, y: 0.5, tracked: true, sampledAt: i * 20, activation: i % 2, openness: i % 2 });
+    field.update(0.02, i * 20);
+  }
+  assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91); field.setHand(null);
+  assert.equal(field.memory.commits.length, 1);
+});
+
+test('mobile pointercancel/lost capture cannot submit a pending imprint; completed memory survives cancel', t => {
+  const field = createField(t); sculptDrag(field, { hold: 2.8 });
+  field.pointerUp(91, true);
+  for (let i = 0; i < 240; i++) field.update(1 / 60, 4000 + i * 1000 / 60);
+  assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91);
+  sculptDrag(field); field.pointerUp(91, true);
+  assert.equal(field.memory.commits.length, 1);
+});
+
+test('VIEW neither commits pending dwell nor modifies completed memory; new SCULPT drag is required', t => {
+  const field = createField(t); sculptDrag(field, { hold: 2.8 }); field.setMode('VIEW', 3500);
+  for (let i = 0; i < 50; i++) field.update(0.1, 3600 + i * 100);
+  assert.equal(field.memory.commits.length, 0);
+  field.setMode('SCULPT', 9000); field.pointerMove(91, 250, 400, 9100);
+  field.update(0.1, 9200); assert.equal(field.memory.commits.length, 0);
+  // Start a fresh stroke with timestamps after the boundary.
+  field.inputStartedAt = -Infinity; sculptDrag(field); field.pointerUp(91);
+  const memory = JSON.stringify(field.memory.commits); field.setMode('VIEW', 10000);
+  assert.equal(field.undoImprint(), false); assert.equal(field.reset(), false);
+  field.pointerDown(8, 100, 300, 10001); field.pointerMove(8, 200, 330, 10030);
+  for (let i = 0; i < 50; i++) field.update(0.1, 11000 + i * 100);
+  assert.equal(JSON.stringify(field.memory.commits), memory);
+});
+
+test('Undo and Restore clear the correct memory and cancel pending touch input', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const first = JSON.stringify(field.memory.commits); sculptDrag(field); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 2);
+  assert.equal(field.undoImprint(), true); assert.equal(JSON.stringify(field.memory.commits), first);
+  sculptDrag(field, { hold: 2 }); field.reset();
+  assert.equal(field.memory.commits.length, 0); assert.equal(field.memory.sessions.size, 0);
+  assert.equal(field.pointers.size, 0); assert.equal(field.undoImprint(), false);
+});
+
+test('FLOW particles and woven skeleton project through the same bounded material field', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91); field.weave.clear();
+  for (let i = 0; i < 240; i++) field.update(1 / 60, 5000 + i * 1000 / 60);
+  const scratch = new Float64Array(3), screen = {};
+  let affectedFlow = false;
+  for (const p of visiblePoints(field)) {
+    const material = field.memory.deform(p.position, scratch);
+    if (p.flow && Math.hypot(...material.map((v, a) => v - p.position[a])) > 0.005) affectedFlow = true;
+    const drift = p.kind === 'interior' ? 0.009 : 0.001;
+    for (let a = 0; a < 3; a++) assert.ok(Math.abs(p.world[a] - (material[a] + p.driftSin[a] * drift)) < 1e-5);
+  }
+  assert.ok(affectedFlow, 'edge flow is carried by the remembered surface');
+  field.mesh.nodes.forEach((p, i) => {
+    field.project(field.memory.deform(p, scratch), screen);
+    assert.ok(Math.hypot(screen.x - field.nodeScreens[i].x, screen.y - field.nodeScreens[i].y) < 1e-8);
+  });
+});
+
+test('ORIGIN suspension preserves imprints and pose, blocks old touch/hand input, and resumes the same pool', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const pool = field.points, memory = JSON.stringify(field.memory.commits);
+  field.setWorkspaceActive(false, 5000);
+  const snapshot = artworkState(field);
+  field.pointerDown(2, 180, 400, 5100); field.pointerMove(2, 250, 410, 5200);
+  assert.equal(field.setHand({ tracked: true, sampledAt: 5300, activation: 1 }), false);
+  for (let i = 0; i < 60; i++) field.animate(6000 + i * 16);
+  field.resize(); assert.equal(artworkState(field), snapshot);
+  assert.equal(field.pointers.size, 0); assert.equal(field.memory.commits.length, 1);
+  field.setWorkspaceActive(true, 10000);
+  field.pointerDown(2, 180, 400, 9000);
+  assert.equal(field.setHand({ tracked: true, sampledAt: 9999, activation: 1 }), false);
+  field.update(0.1, 10010); assert.equal(artworkState(field), snapshot);
+  const p = visiblePoints(field)[10]; field.pointerDown(3, p.x, p.y, 10100);
+  assert.equal(field.sculptHeld, false); assert.equal(field.pointers.size, 1);
+  assert.equal(field.points, pool); assert.equal(JSON.stringify(field.memory.commits), memory);
+});
+
+test('unsaved shape detection ignores idle rotation and VIEW, includes imprints and form edits', t => {
+  const field = createField(t); assert.equal(field.hasUnsavedShape(), false);
+  field.update(0.1); assert.equal(field.hasUnsavedShape(), false);
+  field.setMode('VIEW', 0); field.pointerDown(1, 100, 200, 10); field.pointerMove(1, 200, 220, 20);
+  assert.equal(field.hasUnsavedShape(), false);
+  field.setMode('SCULPT', 30); field.inputStartedAt = -Infinity; sculptDrag(field);
+  assert.equal(field.hasUnsavedShape(), true); field.reset();
+  assert.equal(field.hasUnsavedShape(), false);
+  field.setForm('grid'); assert.equal(field.hasUnsavedShape(), true);
+});
+
 test('a fast swipe after a stationary hold tears locally and particles recover', t => {
   const field = createField(t);
   assert.equal(field.count, 595); assert.equal(field.dpr, 1.5);
@@ -40,7 +209,9 @@ test('a fast swipe after a stationary hold tears locally and particles recover',
   assert.ok(field.weave.damage.some(v => Math.abs(v - 0.55) < 1e-6));
   assert.ok(field.weave.damage.some(v => v === 0), 'distant structure is intact');
   assert.ok(field.points.some(p => p.scatter > 0.1));
+  assert.equal(field.pointers.get(1).intent, 'SCATTER');
   field.pointerUp(1);
+  assert.equal(field.memory.commits.length, 0, 'fast tear must never leave an imprint');
   for (let i = 0; i < 200; i++) field.update(1 / 60);
   assert.ok(field.points.every(p => p.scatter < 0.01));
   assert.ok(field.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
@@ -51,6 +222,61 @@ test('a fast swipe after a stationary hold tears locally and particles recover',
   assert.equal(field.form, 'octahedron'); assert.equal(field.dispersion, 0.55);
   assert.equal(field.inertia, 0.65);
   assert.ok(field.weave.charge.every(v => v === 0));
+});
+
+test('high-frequency fast swipe scatters with momentum and returns to the remembered form', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91); field.weave.clear();
+  for (let i = 0; i < 240; i++) field.update(1 / 60);
+  const memory = JSON.stringify(field.memory.commits);
+  const before = visiblePoints(field).map(p => [...p.world]);
+  const p = visiblePoints(field).find(p => p.kind === 'surface'), x = p.x, y = p.y;
+  field.pointerDown(8, x, y, 5000);
+  for (let i = 1; i <= 16; i++) field.pointerMove(8, x + i * 2, y, 5000 + i * 4);
+  assert.equal(field.pointers.get(8).intent, 'SCATTER');
+  assert.ok(field.points.some(p => p.scatter > 0.3));
+  assert.ok(field.points.some(p => p.scatterMotion.velocity > 1));
+  field.pointerUp(8);
+  assert.equal(JSON.stringify(field.memory.commits), memory);
+  field.update(1 / 60);
+  assert.ok(visiblePoints(field).some((p, i) => Math.hypot(...p.world.map((v, a) => v - before[i][a])) > 0.015));
+  for (let i = 0; i < 900; i++) field.update(1 / 60);
+  assert.ok(field.points.every(p => Math.abs(p.scatterMotion.value) < 0.0001));
+  assert.ok(visiblePoints(field).every((p, i) => Math.hypot(...p.world.map((v, a) => v - before[i][a])) < 0.008));
+  assert.equal(JSON.stringify(field.memory.commits), memory);
+});
+
+test('slow-to-fast cannot save, fast-to-slow cannot save, and the next fresh slow stroke still can', t => {
+  const field = createField(t); sculptDrag(field);
+  const p = field.pointers.get(91);
+  field.pointerMove(91, p.x + 50, p.y, p.time + 20);
+  const last = field.pointers.get(91); field.pointerMove(91, last.x + 5, last.y, last.time + 200);
+  field.pointerUp(91); assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91); assert.equal(field.memory.commits.length, 1);
+  field.undoImprint(); assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91); field.reset(); assert.equal(field.memory.commits.length, 0);
+});
+
+test('high-frequency scatter classification stays immediate but expensive tear scans are frame-budgeted', t => {
+  const field = createField(t), p = visiblePoints(field)[20];
+  field.pointerDown(1, p.x, p.y, 0);
+  const x = p.x, y = p.y; let scans = 0;
+  field.tear = () => { scans++; };
+  for (let i = 1; i <= 100; i++) field.pointerMove(1, x + i * 2, y, i * 4);
+  assert.equal(field.pointers.get(1).intent, 'SCATTER'); field.pointerUp(1);
+  assert.ok(scans > 0 && scans <= 27, `unexpected number of scans: ${scans}`);
+  assert.equal(field.memory.commits.length, 0);
+});
+
+test('quick mouse/touch drags on legacy forms remain finite and cannot create octahedron imprints', t => {
+  const field = createField(t);
+  for (const form of ['lines', 'circle', 'grid']) {
+    field.setForm(form); field.update(0.1);
+    field.pointerDown(1, field.centerX, field.centerY, 0);
+    field.pointerMove(1, field.centerX + 90, field.centerY, 20); field.pointerUp(1);
+    for (let i = 0; i < 30; i++) field.update(1 / 60);
+    assert.ok(field.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+    assert.equal(field.memory.commits.length, 0);
+  }
 });
 
 test('FLOW STATE deconstructs vertices first and rebuilds the interior before edges and vertices', t => {
@@ -259,4 +485,266 @@ for (const goal of [1, 0]) test(`projected particle ${goal ? 'opening' : 'gather
     if (frame === 3) assert.ok(progress > 0.02, 'preview remains visibly responsive');
   }
   assert.ok(previous > 0.99);
+});
+
+// Projection coordinates are presentation data. Snapshot the underlying shape,
+// simulation and history to prove that observation cannot perform an edit.
+const artworkState = field => JSON.stringify({
+  time: field.time, form: field.form, dispersion: field.dispersion, inertia: field.inertia,
+  points: field.points.map(p => [p.home, p.position, p.target, [...p.world], p.motion, p.deformation, p.scatter, p.scatterMotion, p.flow && [...p.flow.position]]),
+  nodes: field.mesh.nodes, charge: [...field.weave.charge], damage: [...field.weave.damage],
+  layers: field.fragments, tracePositions: [...field.trace.positions], traceTimes: [...field.trace.times],
+  traceWeights: [...field.trace.weights], count: field.count, opacity: [...field.budget.opacity],
+});
+
+test('SCULPT is the default; VIEW only changes observation, even with camera and destructive inputs', t => {
+  const field = createField(t);
+  assert.equal(field.mode, 'SCULPT'); assert.equal(field.sculptHeld, false);
+  field.pointerDown(7, field.centerX, field.centerY, 0); field.update(0.3, 300);
+  assert.ok(field.weave.sources.size > 0);
+  const before = visiblePoints(field).map(p => [p.x, p.y]);
+  field.setMode('VIEW', 400);
+  assert.deepEqual(visiblePoints(field).map(p => [p.x, p.y]), before, 'switching does not jump the pose');
+  assert.equal(field.pointers.size, 0); assert.equal(field.weave.sources.size, 0);
+  const snapshot = artworkState(field), pool = field.points;
+  field.pointerMove(7, field.centerX + 100, field.centerY, 410); // old captured drag
+  assert.equal(field.viewYaw, 0);
+  field.pointerDown(10, 100, 100, 420); field.pointerMove(10, 180, 125, 450);
+  field.pointerDown(11, 200, 150, 455); field.pointerMove(11, 300, 200, 460);
+  field.setHand({ x: 0.8, y: 0.8, activation: 1, openness: 1, sampledAt: 470 });
+  field.tear({ x: 0, y: 0 }, { x: 400, y: 400 });
+  assert.equal(field.setForm('grid'), false); assert.equal(field.setDispersion(1), false); assert.equal(field.reset(), false);
+  for (let frame = 0; frame < 60; frame++) field.animate(500 + frame * 1000 / 60);
+  assert.ok(field.viewYaw !== 0 && field.viewPitch !== 0);
+  assert.ok(visiblePoints(field).some((p, i) => Math.hypot(p.x - before[i][0], p.y - before[i][1]) > 5));
+  assert.equal(artworkState(field), snapshot); assert.equal(field.points, pool);
+  assert.equal(field.hand, null); assert.equal(field.pointers.size, 0);
+});
+
+test('mode changes discard old drags and hold the pose until a new SCULPT press', t => {
+  const field = createField(t);
+  field.pointerDown(1, 160, 300, 0); field.setMode('VIEW', 100);
+  field.pointerDown(2, 160, 300, 120); field.pointerMove(2, 220, 310, 150);
+  const angle = field.viewYaw;
+  field.setMode('SCULPT', 200);
+  const snapshot = artworkState(field);
+  field.pointerMove(1, 300, 400, 210); field.pointerMove(2, 320, 410, 220); field.pointerUp(2);
+  field.pointerDown(3, 160, 300, 180); // queued before mode boundary
+  field.setHand(null);
+  for (let i = 0; i < 20; i++) field.animate(230 + i * 16);
+  assert.equal(field.sculptHeld, true); assert.equal(field.focus, null);
+  assert.equal(field.viewPointers.size, 0); assert.equal(field.pointers.size, 0);
+  assert.equal(artworkState(field), snapshot); assert.equal(field.viewYaw, angle);
+  field.pointerDown(3, field.centerX, field.centerY, 600);
+  assert.equal(field.sculptHeld, false); assert.equal(field.pointers.size, 1);
+  assert.equal(field.weave.sources.size, 1);
+  field.pointerUp(3); assert.equal(field.pointers.size, 0);
+});
+
+test('returning to SCULPT rejects cached/old hand packets and requires a new tracked sample', t => {
+  const field = createField(t);
+  const packet = { x: 0.5, y: 0.5, activation: 1, targetActivation: 1, openness: 1, tracked: true, sampledAt: 90 };
+  field.setHand(packet); field.update(0.1, 100);
+  field.setMode('VIEW', 120); field.setMode('SCULPT', 200);
+  const snapshot = artworkState(field);
+  assert.equal(field.setHand(packet), false);
+  assert.equal(field.setHand({ ...packet, sampledAt: 210, tracked: false }), false);
+  assert.equal(field.setHand({ ...packet, sampledAt: undefined }), false);
+  field.update(0.1, 220); assert.equal(artworkState(field), snapshot);
+  field.setHand({ ...packet, sampledAt: 230 }); assert.equal(field.sculptHeld, false);
+  assert.equal(field.setHand(packet), false, 'old packets remain rejected after rearming');
+  field.update(0.1, 240); assert.ok(field.fragments.states[0].value > 0);
+  assert.equal(field.setMode('SCULPT', 250), false, 'reselecting current mode does not interrupt live input');
+  assert.throws(() => field.setMode('UNKNOWN'), RangeError);
+});
+
+test('VIEW drag works while paused, keeps orientation through resize, and cancels cleanly', t => {
+  const field = createField(t);
+  field.paused = true; field.setMode('VIEW', 0);
+  const snapshot = artworkState(field), before = field.points[0].x;
+  field.pointerDown(1, 100, 200, 10); field.pointerMove(1, 170, 220, 20);
+  assert.notEqual(field.points[0].x, before); assert.equal(artworkState(field), snapshot);
+  const angle = field.viewYaw;
+  window.innerWidth = 844; window.innerHeight = 390; field.resize();
+  assert.equal(field.viewYaw, angle); assert.equal(field.dpr, 1.5);
+  field.clearPointers(); field.pointerMove(1, 290, 300, 30);
+  assert.equal(field.viewYaw, angle); assert.equal(artworkState(field), snapshot);
+});
+
+test('TRACE projects consistently after rotating in VIEW and resuming SCULPT', t => {
+  const field = createField(t), projected = { x: 0, y: 0 }, world = new Float32Array(3);
+  field.setMode('VIEW', 0); field.pointerDown(1, 50, 200, 1); field.pointerMove(1, 140, 220, 2);
+  field.setMode('SCULPT', 10);
+  let captures = 0;
+  for (let frame = 0; frame < 40; frame++) {
+    const now = 20 + frame * 40;
+    field.setHand({ x: 0.5 + Math.sin(frame * 0.4) * 0.3, y: 0.5, activation: 0, openness: 0, sampledAt: now });
+    field.time += 0.04; field.update(0.04, now);
+    for (let slot = 0; slot < field.trace.capacity; slot++) {
+      const index = slot * field.trace.samples + field.trace.heads[slot];
+      if (Math.abs(field.trace.times[index] - field.time) > 1e-6) continue;
+      for (let axis = 0; axis < 3; axis++) world[axis] = field.trace.positions[index * 3 + axis];
+      field.projectTracePoint(world, projected);
+      const point = field.points[field.trace.owners[slot]];
+      assert.ok(Math.hypot(projected.x - point.x, projected.y - point.y) < 0.001);
+      captures++;
+    }
+  }
+  assert.ok(captures > 0);
+});
+
+test('FUSION uses shared mapped skeleton, retains GEOMETRY memory and never starts a second renderer', async t => {
+  const { analyzeImage, ImageMaterial } = await import('../src/image-translation.js');
+  const field = createField(t); sculptDrag(field); field.pointerUp(91);
+  const originalPoints = field.points, originalMemory = field.memory, originalMesh = field.mesh;
+  const originalCommits = JSON.stringify(field.memory.commits);
+  let requests = 0; globalThis.requestAnimationFrame = () => { requests++; return 123; };
+  const data = new Uint8ClampedArray(32 * 32 * 4);
+  for (let i = 0; i < 1024; i++) { const v = i % 32 > 20 ? 240 : 30; data.set([v,v,v,255], i * 4); }
+  const material = new ImageMaterial(await analyzeImage({ pixels: { width: 32, height: 32, data } }, { yieldTask: async () => {} }));
+  field.switchArtwork('FUSION', material);
+  assert.equal(requests, 0); assert.equal(field.mode, 'VIEW'); assert.equal(field.material, material);
+  assert.notEqual(field.points, originalPoints); assert.equal(field.memory.commits.length, 0);
+  assert.notDeepEqual(field.mesh.nodes, originalMesh.nodes);
+  const fusionPoints = field.points;
+  const frozen = field.points.map(p => [...p.world]);
+  field.pointerDown(2, 190, 400, 100); field.pointerMove(2, 220, 410, 200); field.pointerUp(2); field.update(.1);
+  assert.deepEqual(field.points.map(p => [...p.world]), frozen); assert.equal(field.memory.commits.length, 0);
+  field.setMode('SCULPT', -1); sculptDrag(field); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 1);
+  const fusionMemory = field.memory;
+  for (let i = 0; i < 40; i++) field.update(1 / 60);
+  const flowing = field.points.find(p => p.flow);
+  assert.deepEqual(Array.from(flowing.flow.materialPosition), Array.from(material.map(flowing.flow.position)));
+  field.switchArtwork('GEOMETRY');
+  assert.equal(field.points, originalPoints); assert.equal(field.memory, originalMemory);
+  assert.equal(JSON.stringify(field.memory.commits), originalCommits); assert.equal(field.mesh, originalMesh);
+  field.switchArtwork('FUSION');
+  assert.equal(field.points, fusionPoints); assert.equal(field.memory, fusionMemory); assert.equal(field.mode, 'SCULPT');
+  assert.equal(field.undoImprint(), true); assert.equal(field.memory.commits.length, 0);
+  assert.equal(requests, 0); assert.equal(field.dispersion, .55); assert.equal(field.inertia, .65);
+});
+
+test('FUSION swipe never commits; Restore returns to translated rest rather than GEOMETRY', async t => {
+  const { analyzeImage, ImageMaterial } = await import('../src/image-translation.js');
+  const field = createField(t), data = new Uint8ClampedArray([200,200,200,255]);
+  const material = new ImageMaterial(await analyzeImage({ pixels: { width: 1, height: 1, data } }, { yieldTask: async () => {} }));
+  field.switchArtwork('FUSION', material); field.setMode('SCULPT', -1);
+  const homes = field.points.map(p => [...p.home]);
+  sculptDrag(field); field.pointerUp(91); assert.equal(field.memory.commits.length, 1);
+  const p = visiblePoints(field).find(p => p.kind === 'surface');
+  field.pointerDown(4, p.x, p.y, 2000); field.pointerMove(4, p.x + 80, p.y, 2020); field.pointerUp(4);
+  assert.equal(field.memory.commits.length, 1); assert.ok(field.points.some(p => p.scatter > .1));
+  for (let i = 0; i < 400; i++) field.update(1 / 60);
+  assert.equal(field.memory.commits.length, 1);
+  field.reset(); assert.equal(field.memory.commits.length, 0);
+  assert.equal(field.material, material); assert.deepEqual(field.points.map(p => p.home), homes);
+  assert.ok(field.points.every(p => p.target === p.home));
+});
+
+test('Density Field nodes and topology stay identical through VIEW, IMPRINT, scatter and Undo/Restore', async t => {
+  const { TranslationJob } = await import('../src/image-translation.js');
+  const { densityImage } = await import('./helpers/density-fixtures.js');
+  const field = createField(t);
+  sculptDrag(field); field.pointerUp(91);
+  const geometryPoints = field.points, geometryMemory = field.memory;
+  const m = await new TranslationJob().run(densityImage('ring'), { yieldTask: async () => {}, count: field.poolCount });
+  field.switchArtwork('FUSION', m);
+  assert.equal(field.mode, 'VIEW'); assert.equal(field.nodeScreens, field.points);
+  assert.equal(field.mesh, m.mesh); assert.equal(field.budget.selected.reduce((a,b)=>a+b), field.count);
+  const before=field.points.map(p=>[...p.world]);
+  field.pointerDown(3,190,400,1000);field.pointerMove(3,230,410,1100);field.pointerUp(3);field.update(.1);
+  assert.deepEqual(field.points.map(p=>[...p.world]),before);assert.equal(field.memory.commits.length,0);
+  field.setMode('SCULPT',-1);
+  let p=visiblePoints(field).find(p=>p.kind!=='interior'&&p.x>70&&p.x<310);
+  field.pointerDown(91,p.x,p.y,2000);
+  const x=p.x,y=p.y;
+  for(let i=1;i<=5;i++)field.pointerMove(91,x+i*4,y+i,2000+i*100);
+  field.pointerUp(91);assert.equal(field.memory.commits.length,1);
+  for(let i=0;i<120;i++)field.update(1/60);
+  assert.ok(field.points.some(p=>Math.hypot(...p.world.map((v,a)=>v-p.home[a]))>.01));
+  for(const [a,b] of field.mesh.links){assert.equal(field.nodeScreens[a],field.points[a]);assert.equal(field.nodeScreens[b],field.points[b]);}
+  for(let swipe=0;swipe<3;swipe++){
+    p=visiblePoints(field).find(p=>p.kind!=='interior'); const x=p.x,y=p.y;
+    field.pointerDown(7,x,y,4000+swipe*100);field.pointerMove(7,x+80,y,4020+swipe*100);field.pointerUp(7);
+  }
+  assert.equal(field.memory.commits.length,1);
+  assert.ok(field.points.some(p=>p.scatter>.1));
+  for(let i=0;i<300;i++)field.update(1/60);
+  assert.equal(field.memory.commits.length,1);
+  assert.equal(field.undoImprint(),true);assert.equal(field.memory.commits.length,0);
+  const rest=field.points.map(p=>p.home);
+  field.reset();assert.equal(field.material,m);assert.deepEqual(field.points.map(p=>p.home),rest);
+  field.draw();
+  field.switchArtwork('GEOMETRY');assert.equal(field.points,geometryPoints);assert.equal(field.memory,geometryMemory);assert.equal(field.memory.commits.length,1);
+  field.switchArtwork('FUSION');assert.equal(field.mesh,m.mesh);assert.equal(field.nodeScreens,field.points);
+});
+
+test('density topology and geometric glyphs draw with bounded mobile batched paths at every quality tier', async t => {
+  const { TranslationJob } = await import('../src/image-translation.js');
+  const { densityImage } = await import('./helpers/density-fixtures.js');
+  let strokes=0,fills=0;
+  const ctx=new Proxy({}, {get:(_,key)=>key==='stroke'?()=>{strokes++;}:key==='fill'?()=>{fills++;}:()=>{}});
+  const field=createField(t,{context:ctx});
+  const m=await new TranslationJob().run(densityImage('corner'),{yieldTask:async()=>{}});
+  field.switchArtwork('FUSION',m);
+  for(let level=0;level<5;level++){
+    field.quality.level=level;field.setParticleCount(field.quality.count);field.budget.advance(1);
+    strokes=0;fills=0;field.draw();
+    assert.ok(strokes<30,'link/glyph strokes stay batched rather than one per link');
+    assert.ok(fills<=20,'surface budget stays sparse');
+    assert.equal(field.budget.selected.reduce((a,b)=>a+b),field.count);
+  }
+});
+
+test('image-driven FUSION has no reserved reference nodes and VIEW rotates without changing the artwork',async t=>{
+ const {TranslationJob}=await import('../src/image-translation.js');
+ const {densityImage}=await import('./helpers/density-fixtures.js');
+ const field=createField(t),m=await new TranslationJob().run(densityImage('corner'),{yieldTask:async()=>{}});
+ field.switchArtwork('FUSION',m);
+ assert.ok(field.points.every(p=>!p.pinned));assert.equal(field.budget.pinned.length,0);
+ for(const count of [425,510,595,722,850]){
+  field.setParticleCount(count);field.budget.advance(1);
+  for(let i=0;i<field.poolCount;i++)if(field.points[i].pinned)assert.equal(field.budget.selected[i],1);
+  field.draw();
+ }
+ const world=field.points.map(p=>[...p.world]),topology=JSON.stringify(field.mesh.referenceTopology),firstX=field.points[0].x;
+ const now=performance.now()+10;
+ field.pointerDown(5,190,400,now);field.pointerMove(5,250,420,now+100);field.pointerUp(5);field.update(1/60,now+200);
+ assert.notEqual(field.points[0].x,firstX);
+ assert.deepEqual(field.points.map(p=>[...p.world]),world);assert.equal(JSON.stringify(field.mesh.referenceTopology),topology);
+ assert.equal(field.memory.commits.length,0);assert.ok(field.points.every(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)));
+});
+
+test('reference lines are excluded from rendering even when weave charge would make them visible',async t=>{
+ const {TranslationJob}=await import('../src/image-translation.js');
+ const {densityImage}=await import('./helpers/density-fixtures.js');
+ let strokes=0;
+ const context=new Proxy({}, {get:(_,key)=>key==='stroke'?()=>{strokes++;}:()=>{}});
+ const field=createField(t,{width:1200,context});
+ const m=await new TranslationJob().run(densityImage('ring'),{yieldTask:async()=>{},count:1900});
+ field.switchArtwork('FUSION',m);strokes=0;field.drawWeave();assert.ok(strokes>0,'image-driven connections are drawn normally');
+ field.mesh.primary.fill(true);field.weave.charge.fill(1);strokes=0;field.drawWeave();
+ assert.equal(strokes,0,'reference edges are not faded lines: they are not submitted at all');
+});
+
+test('FUSION depth projects with parallax and sparse facet lighting follows VIEW and live shared nodes',async t=>{
+ const {TranslationJob}=await import('../src/image-translation.js');
+ const {densityImage}=await import('./helpers/density-fixtures.js');
+ const field=createField(t),m=await new TranslationJob().run(densityImage('corner'),{yieldTask:async()=>{}});
+ field.switchArtwork('FUSION',m);
+ const world=field.points.map(p=>[...p.world]),screen=field.points.map(p=>[p.x,p.y,p.depth]);
+ const triangle=m.mesh.triangles[0],before=field.densityFacetOpacity(...triangle);
+ field.viewYaw=.85;field.viewPitch=.25;field.projectAll();
+ const after=field.densityFacetOpacity(...triangle);
+ assert.deepEqual(field.points.map(p=>[...p.world]),world);
+ assert.ok(field.points.some((p,i)=>Math.abs(p.x-screen[i][0])>20&&Math.abs(p.depth-screen[i][2])>.1),'rotation reveals actual scene depth');
+ assert.ok(Math.abs(before-after)>.0001,'facet shading changes with observation direction');
+ assert.ok(before>=.018&&before<=.04&&after>=.018&&after<=.04);
+ const c=field.points[triangle[2]];c.world[2]+=.1;
+ assert.notEqual(field.densityFacetOpacity(...triangle),after,'facet normal uses live sculpture nodes, not the undeformed base');
+ assert.deepEqual(c.home,m.cached[triangle[2]].point);
+ field.viewRotated=false;
+ const front={},back={};field.projectScene(.3,.2,.4,front);field.projectScene(.3,.2,-.4,back);
+ assert.ok(front.x-field.centerX>back.x-field.centerX,'perspective distinguishes front and back at equal XY');
 });

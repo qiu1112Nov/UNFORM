@@ -136,3 +136,24 @@ test('a delayed old Worker result cannot overwrite a newer camera session gestur
   for (let i = 0; i < 8; i++) await Promise.resolve();
   assert.equal(env.outputs.length, length); assert.equal(env.camera.response.confirmed, 0);
 });
+
+test('mode input reset keeps recognition running but rejects an in-flight result from before the boundary', async t => {
+  const env = setup(t); await env.camera.start();
+  env.video.videoWidth = 640; env.video.videoHeight = 480;
+  let resolve;
+  const detect = env.camera.workerClient.detect;
+  env.camera.workerClient.detect = () => new Promise(done => { resolve = done; });
+  await env.frame(100);
+  const worker = env.camera.workerClient, pump = env.camera.pump;
+  env.camera.resetGestureInput();
+  resolve({ landmarks: landmarks(), inferenceMs: 10, bitmapMs: 1 });
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+  assert.equal(env.outputs.length, 0); assert.equal(env.camera.response.confirmed, null);
+  assert.equal(env.camera.lastInferenceAt, 100, 'diagnostics still record rejected control frames');
+  assert.equal(env.camera.workerClient, worker); assert.equal(env.camera.pump, pump); assert.equal(env.camera.active, true);
+  env.camera.workerClient.detect = detect;
+  await env.frame(200); assert.equal(env.camera.response.confirmed, null);
+  assert.equal(env.outputs.at(-1).previewGoal, 1, 'new valid sample still pre-responds immediately');
+  await env.frame(300); assert.equal(env.camera.response.confirmed, 1);
+  assert.equal(env.counts().workerClosed, 0); assert.equal(env.counts().streamStopped, 0);
+});

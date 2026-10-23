@@ -1,8 +1,102 @@
-# UNFORM 3.2.3 — DIRECT RESPONSE
+# UNFORM 4.0 — FUSION & Interactive Geometry
 
-黑白极简的交互粒子雕塑。第一阶段以正八面体为主体，用真实三维坐标、自转与透视投影在 Canvas 2D 中绘制，保留原有摄像头与 Lines / Circle / Grid 功能。
+通过动作塑造生成式数字材料的黑白交互作品。GEOMETRY 从正八面体开始，FUSION 3.0 将本地图片的轮廓、明暗、视觉重心和多尺度密度场转译为三维点线面结构；两条路径进入同一个 CREATE 空间，复用 Canvas 2D 三维投影、SCULPT / VIEW、触控与可选摄像头输入。
 
-## 3.2.3 连续直接响应
+## 4.0 功能与验收状态
+
+- **GEOMETRY / FUSION**：默认几何入口与本地图片导入、预览、裁切、分析、重新生成均已开放。图片和视频只在当前浏览器处理，不上传到服务器。
+- **Density Field**：保留图像驱动的疏密、轮廓和负空间，以隐性八面体方向、局部斜向连接、共享节点的稀疏三角面和前后深度建立三维结构，不显示完整预设八面体外框。
+- **SCULPT / VIEW**：慢拖塑形，有效塑形后松手自动留痕；VIEW 拖动只观察。连续快速滑动打散后回到已保存形态，不新增留痕历史；Undo / Restore 分别撤销最近留痕和恢复当前作品初始形态。
+- **双作品状态隔离**：GEOMETRY 与 FUSION 分别保留粒子、留痕、撤销和观察状态，切换不覆盖另一件作品。状态仅保存在当前页面会话，刷新或关闭页面会丢失；尚未提供作品文件持久化或静态图片保存。
+- **性能与动态**：保留 FLOW / FRAGMENT / TRACE、55% 解构强度、65% 惯性、移动端自适应粒子/DPR/拖尾预算，以及 Worker 优先、串行推理和失败回退。
+
+发布前自动化基线为 **215 项测试**，生产构建和 `/UNFORM/` 静态资源检查通过。受控 Chromium 检查覆盖桌面和手机视口，不能替代手机硬件验收。用户已通过 Cloudflare 手动预览验证 GEOMETRY、FUSION、SCULPT、VIEW、松手留痕、Undo 和连续快速滑动打散；最近确认斜向连接与空间顶点可见，三维厚度仍稍扁，本轮接受并保持算法不变。全部交互的最终真机回归尚未完成。
+
+**摄像头手机/平板真机验收仍待完成。** 本次按用户决定先提交 4.0 发布 PR，后续补测真实张掌/握拳、快速反向、持续交互、Worker 回退及性能。云端 Chromium 曾因模型下载证书信任错误无法完成真实推理；摄像头不可用时仍保留鼠标/触控。测试通过不表示摄像头已在目标真机验收，也不表示 4.0 已合并或部署到 GitHub Pages。
+
+## 4.0 ORIGIN / GEOMETRY 入口
+
+首次打开 `/UNFORM/` 显示 **HOW WILL YOUR FORM BEGIN?**。GEOMETRY 是默认入口，第一次点击创建正八面体粒子场并进入 SCULPT；FUSION 打开本地图片选择、预览与裁切，确认后进入 TRANSLATE。分析和生成完成后，用户进入 CREATE / VIEW，再按需切换 SCULPT。
+
+CREATE 底部 **← ORIGIN** 和顶部 UNFORM 标识均可返回。有留痕、编织或其他形态修改时先确认；取消则继续创作。确认返回仍保留当前标签页的作品和观察状态，暂停模拟、取消活动输入并关闭摄像头。再次选择 GEOMETRY 继续同一作品，需要新的有效触控或手势，摄像头需主动重新开启。不会重新初始化粒子或自动 Restore。
+
+记忆尚未持久化，刷新或关闭页面仍会丢失。ORIGIN 在小屏与横屏可纵向滚动；CREATE 延用原有响应式布局、55% 解构强度、65% 惯性、SCULPT/VIEW、IMPRINT、Undo 和 Restore。GitHub Pages 和预览 Artifact 配置不变。
+
+## 4.0 创作空间：SCULPT / VIEW
+
+独立开发分支 `feat/unform-4-sculpt-view` 包含本次 4.0 更新，沿用现有渲染引擎，以模式和统一输入边界保护作品。
+
+- GEOMETRY 默认 **SCULPT**，FUSION 生成后从 **VIEW** 进入；切换 SCULPT 后可使用原有鼠标/触控塑形、编织、撕裂、多点触控、手势预响应、形态与参数控制。
+- 点击 **VIEW** 保持当前形态；用鼠标或一根手指拖动观察三维作品，暂停动画时也可观察。此时停止形态模拟及自转，形态按钮、解构滑块与 Reset 禁用，摄像头识别继续运行但不写入作品。
+- 切换会结束活动输入并释放指针捕获，保留形态与观察角度。返回 SCULPT 后等待新的按下操作、显式编辑操作或切换后采集的有效手部结果；旧拖动、旧确认状态及在途推理结果不会跨模式继续塑形。
+- 观察时固定当前可见粒子预算以保持快照一致；性能诊断继续更新。SCULPT 恢复输入后继续原有自适应质量策略，粒子/DPR/TRACE 预算与推理频率配置不变。
+- 运行 `npm run dev`，打开终端显示的 `/UNFORM/` 地址预览。摄像头沿用 HTTPS/localhost 限制。
+
+当前完整测试套件覆盖模式切换、暂停观察、输入结束与重新开始、摄像头在途帧隔离、手机横竖屏尺寸以及生产资源路径。真机状态以本 README 顶部的 4.0 验收说明为准。
+
+## SCULPT 2.2：慢拖留痕，快划打散
+
+在正八面体上慢速拖动，保持 SCULPT 2.1 的增益、范围和弹簧响应；正常松手立即提交一条 IMPRINT。快速滑动进入互斥的 SCATTER：按 CSS 像素速度约 420px/s 和至少 6px 连续方向位移判定，触控与鼠标共用。高频小步事件可累计识别；极小抖动不能触发。一次触控只要进入打散，之后即使变慢或停顿，松手也不会留痕；下一次重新按下才能塑形保存。
+
+打散沿路径局部断线，给粒子瞬时速度后由现有惯性扩散、回聚，始终保留已有局部形态记忆及历史。最初触发立即处理，后续全粒子扫描按约 16ms 限流并在松手补齐末段，避免高频触屏事件重复扫描。参数集中在 `src/sculpt-input.js`，55% 解构、65% 惯性不变。VIEW 只观察，Undo/Restore、ORIGIN 和摄像头仍沿用原逻辑。
+
+## Cloudflare 专用预览包：明确区分两层 ZIP
+
+工作流仍只在 `feat/unform-4-sculpt-view` 推送时生成 Artifact，不自动部署。需要 Python 3 进行打包及相关测试（GitHub Ubuntu runner 已提供）。`npm run build` 后，工作流执行 `python3 scripts/package-preview.py --source dist --output <输出目录>/UNFORM-Cloudflare-preview.zip`。
+
+手机操作：
+
+1. 登录 GitHub，进入对应提交的成功 Actions 记录，下载单个 **UNFORM-4-sculpt-view-static-preview** Artifact。外层通常为 `UNFORM-4-sculpt-view-static-preview.zip`，不要使用下载全部 Artifacts 的总包。
+2. **只解压外层一次，取出内层 `UNFORM-Cloudflare-preview.zip`。上传这个内层 ZIP 原文件**，不是外层 Artifact ZIP，也不是手机解压工具生成的同名文件夹。内层不需要重命名；不依赖 ZIP 名称自动创建目录。
+3. 在 Cloudflare Pages 手动上传前后核对文件树，站点根必须直接有 `_headers` 和 `UNFORM/`，后者内部包含 `index.html`、`assets/`、`hand-worker.js`、`mediapipe/`、`preview-version.json`。若上传器额外套目录，应改为上传解压后的站点根内容（`_headers` 与 `UNFORM/` 一起）或使用电脑上传；不要在错误目录树下继续发布。
+4. 发布后打开 `https://<你的项目>.pages.dev/UNFORM/`。现有项目的目标地址为 `https://unform-4-preview.pages.dev/UNFORM/`；这里是操作目标，不表示本轮已经部署验证。
+5. 打开 `/UNFORM/preview-version.json`，核对 `commit` 与所选 Actions SHA 一致。记录还包含构建时间及资源 SHA-256，帮助区分旧部署和旧缓存。本地未提交打包标记为 `local-working-tree`。
+
+真正上传包的目录结构：
+
+```text
+UNFORM-Cloudflare-preview.zip
+├── _headers
+└── UNFORM/
+    ├── index.html
+    ├── assets/                     # 带内容哈希的 JS/CSS
+    ├── hand-worker.js
+    ├── mediapipe/                  # vision_bundle.mjs、SIMD/非 SIMD WASM/JS
+    ├── favicon.svg
+    └── preview-version.json
+```
+
+打包器检查 ZIP 完整性、所有文件字节、唯一站点根结构、HTML 的 `/UNFORM/` 资源引用、哈希入口、动态模块、Worker 和 WASM 文件及内容。文件缺失、JS/WASM 实际为 HTML 回退、错误 base 时构建会失败。本地 HTTP 验证可检查实际 MIME；最终 Cloudflare 的响应类型和目录仍需部署后检查，不能只看 200。JS 应为 JavaScript、CSS 为 `text/css`、WASM 为 `application/wasm` 且以 WASM 魔数开头，不能返回 HTML。
+
+### 预览缓存规则与排查
+
+专用包根目录的 `_headers` 来自 `scripts/cloudflare-preview.headers`，依据 [Cloudflare Pages 官方 Headers 规则](https://developers.cloudflare.com/pages/configuration/headers/)：它对静态资源响应生效，不适用于 Pages Functions。`/UNFORM`、`/UNFORM/`、`/UNFORM/index.html`、`/UNFORM/preview-version.json` 采用 `Cache-Control: no-store`；仅 `/UNFORM/assets/*` 的哈希资源采用一年 immutable 缓存；固定名称的 Worker、favicon、MediaPipe 采用 `no-cache`，允许缓存但每次重新验证。WASM 和本地 MediaPipe 模块额外声明正确 MIME。规则没有把整个 `/UNFORM/*` 缓存为 immutable，避免固定名称文件长期过期。
+
+这些规则只写进 Cloudflare 内层 ZIP，**不写入 `dist` 或 `public`**，不修改 Vite base 或正式 GitHub Pages 工作流。新响应头无法追溯清除浏览器已存的旧 HTML；更新后可先用 `/UNFORM/?v=<本次提交SHA>` 测试，再刷新或清理该站点缓存，并核对版本 JSON。项目没有注册 Service Worker；仍需确认 Cloudflare 仪表盘是否存在额外 Cache Rules/旧部署、手机是否上传了正确 ZIP。普通窗口与无痕结果不同并不能单独证明根因，不能以“改名 ZIP”替代这些检查。
+
+本地测试不等于 Cloudflare 实际执行 `_headers`。手机上传解压目录、真实 HTTPS 响应头、浏览器旧缓存清理和账号级缓存规则都必须上线后验证；本轮不部署、不宣称线上问题已解决。
+
+## SCULPT 2.1 塑形表现力
+
+保留松手立即留痕。针对短拖动，局部拖动增益由 1 提至 1.35，影响半径由 0.55 调至 0.62，按住时的弹簧速率由 1.3 提至 1.8；松手速率仍为 1.3。沿用中心强、边缘平滑归零的平方衰减场，粒子、FLOW 与骨架共用。60% 留存比例、0.32 拖动上限、0.24 总偏移上限、55% 解构及 65% 惯性不变。
+
+误触门槛仍为 8px 净拖动和 3px 预计留存位移，使用增益前的物理位移判定。历史及 Undo 在松手时立即更新，成功文字在残余位移小于约 0.6px、速度低于约 3px/s 后显示 0.9 秒；新操作、Undo/Restore、模式/页面切换会取消旧提示，不阻塞输入。全部参数集中在 `src/imprint.js`，未引入额外渲染循环、依赖或粒子特效。手机实际触感与持续性能仍需真机验证。
+
+## 4.0 IMPRINT 2.0 松手留痕
+
+SCULPT 下在雕塑上有效拖动后正常松手即提交 IMPRINT，不再等待 3 秒。点击、净位移不足约 8 CSS px，或预计留存形变小于约 3 CSS px 时不创建历史；形变阈值按投影尺度计算，不随粒子数或 DPR 改变。保留约 60% 的拖动目标，提交时转移持久层与弹性层位移并保留速度，避免跳变或弹回原始形态。鼠标主键复用同一 pointer 路径。
+
+原始坐标保持不变；独立的物体空间局部位移场同时作用于粒子、棱线 FLOW 和编织骨架。偏移有范围和幅度限制，保留 55% 解构强度、65% 惯性及原有摄像头路径。VIEW 冻结观察且不提交留痕；返回 SCULPT 需要新输入。切换形态保留正八面体记忆，其他形态不应用它。
+
+停止明显移动约 0.55 秒会出现一次低透明度白色环形脉冲，0.45 秒后消失；仅为反馈，不写历史，不是保存条件。多次停顿不创建历史，正常松手最多提交一条。SCULPT 2.2 中快速滑动改为不保存的 SCATTER；慢拖仍无需等待。
+
+控件 ↶ / **Undo last imprint** 撤销最近一次已完成留痕；原 Reset 图标现为 **Restore original form**，清除全部记忆并恢复初始形态。两者在 VIEW 禁用。取消/失去指针捕获/切换 VIEW/返回 ORIGIN 不会提交未完成留痕，已完成留痕不因此删除。任何多指参与会取消整次连续触控的提交资格，最后一根手指松开也不保存；全部抬起后新单指操作才能留痕。摄像头仍只驱动已有动态，不生成触控留痕历史。
+
+参数集中在 `src/imprint.js` 的 `IMPRINT`。当前最多 24 次留痕、4 个活动输入及最多 24 个回弹缓冲，仅单指拖动可提交；每次按下最多提交一次。记忆只存在于当前页面会话，刷新会丢失，尚无作品持久化。暂停动画时不累计停顿反馈；正常松手提交不依赖动画帧。达到 24 次上限后需先 Undo 或 Restore 才能继续新增留痕。安卓真机的可见度、误触和长时间性能仍需验证。
+
+## 历史实现记录：3.2.3 连续直接响应
+
+以下 3.x 章节保留当时的实现背景、阶段测试数量与局限。当前交互和验收状态以顶部的 4.0、SCULPT 2.2、IMPRINT 2.0 和 FUSION 3.0 说明为准。
 
 基于 main `c80f5fa`，修复“预响应 → 回退 → 正式响应”的双重位移。原先把正式分层进度与快速消退的附加位移相加；现在预响应直接推进同一组分层弹簧，确认只改变目标，保留位置与速度。等待正式启动的层保持/接近预响应位置，不返回初始形态。移除确认后的额外 180ms 目标锁存，已确认状态仍保持至明确反向或持续失去追踪；短暂 unknown/no-hand 保留最近可信意图。
 
@@ -93,11 +187,13 @@ npm run build    # 生成 dist/，包含本地 WASM 资源
 npm run preview  # 本地检查生产构建
 ```
 
-## 交互
+## 当前交互
 
-- **鼠标 / 单指触摸**：在正八面体附近触摸或按住开始局部编织；按住约 2–6 秒可观察虚线逐渐连接并向其他面蔓延。快速划过以打断连接、散开粒子，释放后重聚。只有按住滑动才会打断，悬停不触发。
-- **多点触摸**：最多两个编织传播源；双指距离也控制全局分散程度，靠拢聚合、分开扩散。系统取消触摸、窗口失焦或切后台会清理按压状态。
-- **形态**：Octa 为默认正八面体；Lines 为波形线列，Circle 为旋转球壳，Grid 为几何网格，切换时平滑重组。
+- **鼠标 / 单指触摸**：SCULPT 下慢拖局部塑形，有效形变在正常松手时留痕。停顿约 0.55 秒的轻微脉冲仅作反馈；连续快速滑动只打散、不保存。悬停不触发打散。
+- **VIEW**：鼠标或单指拖动只旋转观察，不修改作品。回到 SCULPT 后需新输入；模式切换会结束旧拖动，不意外提交留痕。
+- **Undo / Restore**：撤销最近一次留痕／恢复当前作品的初始形态；FUSION 恢复到本次转译结果。两者在 VIEW 禁用。
+- **多点触摸**：保留原有编织与双指分散控制；多指参与会取消该次连续触控的留痕资格。系统取消触摸、窗口失焦或切后台会清理按压状态。
+- **形态**：GEOMETRY 默认 Octa 正八面体，保留 Lines / Circle / Grid；FUSION 使用图像驱动的 Field 及其共享拓扑。
 - **Deconstruction**：手动调整解构强度；复位恢复正八面体、55% 解构强度、65% 运动惯性，并清除编织痕迹。粒子运动继续平滑回到结构中。
 - **暂停**：暂停/继续动画与编织。无控件焦点时，Space 切换暂停，1–4 依次选择 Octa / Lines / Circle / Grid。系统选择“减少动态效果”时默认暂停，需主动播放以启用动态编织。
 - **摄像头**：点击 Enable camera 后才请求权限。张掌扩散，握拳聚合，移动手部控制场的位置。有效手势优先于手动扩散设置；没有检测到手时自动恢复指针/触摸控制。
@@ -120,11 +216,11 @@ WASM 与应用同源加载，模型需要连接 `storage.googleapis.com`。若�
 
 ## GitHub Pages 部署（HTTPS）
 
-仓库附有 `.github/workflows/deploy.yml`。`main` 更新或手动触发时，工作流执行 `npm ci`、`npm test`、`npm run build`，再将 `dist` 发布到 Pages。部署会公开网站；以下为操作步骤，**不表示已经部署**。
+仓库附有 `.github/workflows/deploy.yml`。`main` 更新或手动触发时，工作流执行 `npm ci`、`npm test`、`npm run build`，再将 `dist` 发布到 Pages。4.0 通过功能分支 PR 审核后发布；以下说明不表示本次更新已经合并或部署。
 
 1. 将开发分支 PR 合并到 `main`。
 2. 在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
-3. 在 **Actions → Deploy to GitHub Pages → Run workflow** 中选择 `main` 手动触发；之后推送到 main 会自动构建部署。
+3. 合并到 `main` 后现有工作流会自动构建部署，无需额外手动触发。只有明确需要重跑时才在 Actions 选择相应的 main 运行记录。
 4. 等待 build 和 deploy 成功，从 Pages 设置或部署环境读取真实 HTTPS 地址。目标网址为 `https://qiu1112nov.github.io/UNFORM/`，以 GitHub 实际显示为准。
 5. 用手机与电脑打开地址，主动开启摄像头并验证张掌、握拳及拒绝授权回退。
 
@@ -140,11 +236,7 @@ Vite 使用 `base: '/UNFORM/'`，CSS、JavaScript、favicon 和 MediaPipe WASM �
 
 ## 分支与合并
 
-开发分支：`feat/unform-particle-art`。若尚未自动创建 PR，可在 GitHub 打开 **Pull requests → New pull request**，base 选 `main`，compare 选该分支。检查构建和交互后合并。也可在已登录的 GitHub CLI 运行：
-
-```sh
-gh pr create --base main --head feat/unform-particle-art --title "Build UNFORM gesture-driven particle art" --body "Adds a responsive Vite/Canvas particle experience, optional local hand tracking, tests and HTTPS deployment instructions."
-```
+4.0 开发分支：`feat/unform-4-sculpt-view`。发布 PR 的 base 为 `main`，标题为 **UNFORM 4.0 — FUSION & Interactive Geometry Major Update**。先检查是否已有同分支 PR，有则更新，避免重复创建；未创建时可使用 [GitHub 比较页面](https://github.com/qiu1112Nov/UNFORM/compare/main...feat/unform-4-sculpt-view?expand=1)。确认测试结果和上述摄像头待测风险后，由用户审核并决定合并。创建 PR 本身不部署；合并引起 main 更新才会触发正式 Pages 工作流，Cloudflare 仅用于预览。
 
 ## 项目结构
 
@@ -164,3 +256,26 @@ src/style.css      响应式黑白界面
 scripts/           本地 WASM 资源准备
 tests/             Node 内置测试，无需额外测试依赖
 ```
+
+### FUSION 3.0 — Density Field
+
+ORIGIN → FUSION opens a local image picker for JPEG, PNG and WebP (up to 20 MB; decoded images up to 40 megapixels). HEIC is not supported in this phase: export it as JPEG first. Choose an image, drag the square preview or use the position/zoom sliders, then select **CONFIRM IMAGE** to enter **TRANSLATE**. **EDIT FRAME** returns to the same crop; choosing another image resets framing. Cancel clears the local image and returns to ORIGIN. Dismissing the native picker leaves the current image unchanged.
+
+Confirming a crop starts real local analysis and material generation in TRANSLATE; choose **ENTER CREATE / VIEW** when ready. **REGENERATE** varies particle sampling, and **EDIT FRAME** returns to the crop. Analysis errors explain how to retry. No automatic navigation or replacement of the GEOMETRY artwork occurs. Images are decoded in the page, never uploaded, and are not persisted across refreshes. The working source is reduced to a maximum side of 2048 pixels; the confirmed crop is 512×512. Very large originals can still use memory during the browser's initial image decode.
+
+`src/fusion.js` separates preparation from translation: `FusionSession.getTranslationInput()` returns `null` until confirmation, then a versioned `{ version, kind, width, height, colorSpace, crop, pixels }` contract (`pixels` is RGBA `ImageData` in the browser). Crop coordinates use the resized, orientation-corrected working source. `src/image-translation.js` consumes that contract explicitly, with cancellation checks between bounded work batches. Adjustment/reselection invalidates the previous confirmation; cancellation also invalidates pending asynchronous image loads and releases the working canvas.
+
+
+FUSION analyzes 64×64 luminance and opacity in the browser. `src/density-field.js` builds a multi-scale field from 1/3/7-pixel smoothing, background-relative contrast, alpha silhouette, medium-scale-supported contours, local gradient tensors/corners and the visual center. These are measured cues, not segmentation or object recognition. High-frequency texture has limited influence; when fine-scale variation lacks support at a coarser scale, a visible texture-dominated hint and a restrained neutral field replace false contours/glyphs/facets. Near-flat inputs receive the same restrained fallback. The TRANSLATE map now displays density, with node/link/facet statistics. Density weights and hard budgets live in `DENSITY_FIELD`; `TranslationJob.run({pixels}, {weights})` can override the named weights without changing defaults.
+
+The octahedron is now an **implicit reference**, not a required external frame. `src/base-topology.js` retains the replaceable descriptor contract (six vertices, twelve edges, eight face regions, guide embedding and optional strict envelope). FUSION does not append reference vertices or edge samples to its particle pool, does not reserve those nodes at low quality and does not seed its display graph with preset edge chains. `createBaseScaffold` remains a helper for explicit future geometry modes, not a default FUSION generator. The renderer also excludes reference-tagged lines from submission, including charged weave lines; this is not an opacity adjustment. GEOMETRY's own octahedral renderer remains unchanged.
+
+All visible FUSION nodes are sampled from the image density CDF, with contour-biased sampling, subcell jitter, negative space and about 20% interior detail samples. The base embedding now supplies 74% of XY placement and 86% of depth: diamond-tapered image coordinates and piecewise-linear triangular depth replace the former at-most-12% guide and rounded shallow relief. Image features still determine every sampled UV, local density, thickness variation and detail offset; this is neither a box normalization nor a uniform octahedron surface sample. Roughly 20% of eligible non-interior, contour-supported samples borrow a nearby reference-edge direction with a bounded pull (42%, at most .15 units), excluding edge endpoints. These disconnected ridge portions reuse image nodes, never seed full edge chains, and do not guarantee six equal tips for every subject. Detail offsets remain bounded to .065. The former hard L1 envelope is not applied to FUSION, and no fixed vertices dictate axis extents. A radius-1.55 numerical safety bound is not used as a sampling surface. Parameters live in `DENSITY_FIELD`; topology metadata lives in `mesh.referenceTopology`, while `mesh.nodes`, `mesh.links` and `mesh.triangles` describe only the visible image-driven sculpture.
+
+One spatial graph owns particles, connections and facets. A 3D hash restricts local candidate searches to 48 per node; direction, distance, image-density support along each link, degree and deliberate isolated nodes prevent a uniform grid or bridges through negative space. Local links near supported ridge portions also favor the corresponding 3D diagonal, instead of following only the image's 2D tangent. Only closed local graph triangles with adequate shape, moderate density and coherent directions can become facets; their normals must align with a reference triangular face normal (absolute dot product at least .86). This constrains small existing graph triangles, never adds the eight reference faces. Total rest-triangle 3D area is at most 3.5% of the nodes' XY bounding-box area; this is a generation budget, not a guarantee of screen area at arbitrary VIEW angles. Live facets disappear during scattering or excessive strain. Corner-rich/contour-rich nodes may use sparse wireframe tetrahedron/octahedron micro-particles; their centers are graph nodes, with vertices projected in 3D. Graph links and facets use the exact live particle coordinates, so IMPRINT and movement cannot leave a second skeleton behind. FLOW follows existing graph edges with reusable buffers.
+
+Maximum pools remain 850 mobile / 1900 desktop. Density graphs cap lines at 720 / 1600, facets at 14 / 28 and geometric glyphs at 24 / 48. The existing phone DPR, adaptive quality, trace budget and camera scheduling are unchanged. Adaptive particle subsets respect the image-driven category ratios; no reference nodes consume the visual budget; links/facets whose nodes are hidden are hidden too. Analysis, sampling and graph construction yield between bounded batches; a cancelled generation cannot publish a stale result. The existing renderer/VIEW/SCULPT loop is reused.
+
+Depth perception follow-up: the triangular roof previously squeezed contour-heavy peripheral nodes toward the image plane. A bounded local thickness term now complements that roof according to the existing contour/thickness values and remaining roof depth, without resampling UVs, changing density weights or uniformly stretching Z. Supported local ridge links can cross more than the old .13 Z-gap cutoff; depth links receive limited priority within the same 48-candidate/degree/line budgets. Up to half the existing facet slots first seek valid triangles with a .065 depth span, then other valid triangles fill available slots. The original area budget and reference-face alignment still apply. FUSION facets use live-node normals with double-sided camera-space light (1.8–4% opacity); link base opacity has a restrained depth cue. Projection, camera inference, GEOMETRY and input/memory logic are unchanged. `tests/fixtures/fusion-volume-baseline.json` records density/sampling fingerprints and depth measurements from commit `2fb22ba`, so tests detect density drift as well as regressions in populated depth, slanted links and shared-node facets. Headless browser checks are not phone GPU or camera benchmarks.
+
+GEOMETRY and the latest FUSION sculpture retain separate particle, memory/Undo, connectivity and observation states in the tab. ORIGIN provides **RESUME FUSION**. Replacing an existing FUSION with a newly generated material asks for confirmation. Undo removes imprints; Restore returns FUSION to its translated rest, not the original GEOMETRY shape. These states are not persisted through refresh. The image decoder can still briefly allocate the full original image before downsizing; phone memory usage, EXIF orientation and visual quality still require device testing.
