@@ -23,7 +23,7 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Package upload-ready ZIP with only UNFORM at the root
+      - name: Package UNFORM.zip with build files at the root
         run: |
           python3 - <<'PY'
           import os
@@ -35,18 +35,19 @@ jobs:
           files = sorted(path for path in source.rglob('*') if path.is_file())
           output = Path(os.environ['RUNNER_TEMP']) / 'unform-preview-download'
           output.mkdir(parents=True, exist_ok=True)
-          archive = output / 'UNFORM-cloudflare-upload.zip'
+          archive = output / 'UNFORM.zip'
           with ZipFile(archive, 'w', ZIP_DEFLATED) as package:
               for path in files:
-                  package.write(path, 'UNFORM/' + path.relative_to(source).as_posix())
+                  package.write(path, path.relative_to(source).as_posix())
           with ZipFile(archive) as package:
               names = package.namelist()
               assert package.testzip() is None, 'Corrupt ZIP entry'
-              assert {name.split('/')[0] for name in names} == {'UNFORM'}
-              assert 'UNFORM/index.html' in names
+              assert archive.name == 'UNFORM.zip'
+              assert 'index.html' in names
+              assert not any(name.startswith('UNFORM/') for name in names)
               assert len(names) == len(files), 'Incomplete ZIP'
               for path in files:
-                  assert package.read('UNFORM/' + path.relative_to(source).as_posix()) == path.read_bytes()
+                  assert package.read(path.relative_to(source).as_posix()) == path.read_bytes()
               print('\n'.join(names))
           print(f'Validated deployment ZIP: {archive}')
           PY
@@ -54,7 +55,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: UNFORM-4-sculpt-view-static-preview
-          path: ${{ runner.temp }}/unform-preview-download/UNFORM-cloudflare-upload.zip
+          path: ${{ runner.temp }}/unform-preview-download/UNFORM.zip
           compression-level: 0
           if-no-files-found: error
           retention-days: 14
@@ -62,8 +63,9 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
           Download **UNFORM-4-sculpt-view-static-preview**, then extract the GitHub Artifact wrapper ZIP once.
-          Upload the inner **UNFORM-cloudflare-upload.zip** to Cloudflare Pages.
-          The deployment ZIP contains only `UNFORM/` at its root, including `UNFORM/index.html`.
+          Upload the inner **UNFORM.zip** to Cloudflare Pages. Keep this filename unchanged.
+          This ZIP contains `index.html`, `assets/` and `mediapipe/` directly, with no enclosing `UNFORM/` folder.
+          For the mobile upload flow that creates a folder from the ZIP filename, the resulting path is `UNFORM/index.html`.
           Do not upload the outer Artifact ZIP or an enclosing folder created by your extraction tool.
           The preview URL must end in `/UNFORM/`.
           SUMMARY
