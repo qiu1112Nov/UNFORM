@@ -32,7 +32,11 @@ if (field) {
   const syncMemory = () => { $('#undo').disabled = field.mode !== 'SCULPT' || !field.memory.commits.length; };
   field.onMemoryChange = action => {
     syncMemory();
-    status.textContent = action === 'COMMIT' ? `IMPRINT / Local shape remembered (${field.memory.commits.length}/${IMPRINT.maxCommits}).`
+    // History and Undo update on release. Only the visual acknowledgment waits
+    // for the latest local spring to settle; no timer can overwrite newer input.
+    if (action === 'COMMIT') return;
+    status.textContent = action === 'SETTLED' ? `IMPRINT / Local shape remembered (${field.memory.commits.length}/${IMPRINT.maxCommits}).`
+      : action === 'INPUT' || action === 'CLEAR' ? 'SCULPT / Drag to shape. Release to imprint.'
       : action === 'UNDO' ? 'UNDO / Last imprint removed.'
       : action === 'LIMIT' ? 'IMPRINT / Memory is full. Undo or Restore to make room.' : 'RESTORE / Original form restored.';
   };

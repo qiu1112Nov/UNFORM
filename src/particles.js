@@ -206,6 +206,8 @@ export class ParticleField {
     if (!this.workspaceActive || now < this.inputStartedAt) return;
     if (this.mode === 'VIEW') { this.viewPointers.set(id, { x, y }); return; }
     this.sculptHeld = false;
+    this.memory.notice = null;
+    this.onMemoryChange?.('INPUT');
     const point = { x, y, time: now, quiet: 0, tearing: false };
     this.pointers.set(id, point); this.focus = point;
     if (this.form === 'octahedron') {
@@ -326,7 +328,8 @@ export class ParticleField {
     if (this.hand?.validUntil !== undefined && now > this.hand.validUntil) this.setHand(null);
     this.budget.advance(dt);
     const coefficients = springCoefficients(dt, this.inertia);
-    this.memory.update(dt, this.inertia, this.pointers.size === 1 && this.form === 'octahedron');
+    const feedback = this.memory.update(dt, this.inertia, this.pointers.size === 1 && this.form === 'octahedron');
+    if (feedback) this.onMemoryChange?.(feedback);
     const scatterCoefficients = springCoefficients(dt, this.inertia, 2);
     const layers = {
       edge: springCoefficients(dt, this.inertia, 1.3),

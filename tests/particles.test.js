@@ -59,6 +59,20 @@ test('release before the next animation frame still remembers effective mobile s
   assert.ok(field.memory.commits[0].offset.some(v => Math.abs(v) > 0.03));
 });
 
+test('Undo is available on release while the renderer acknowledges success only after local rest', t => {
+  const field = createField(t), events = [];
+  field.onMemoryChange = event => events.push(event);
+  sculptDrag(field); field.pointerUp(91);
+  assert.equal(field.memory.commits.length, 1); assert.ok(events.includes('COMMIT'));
+  assert.ok(!events.includes('SETTLED'));
+  for (let i = 0; i < 120; i++) field.update(1 / 60);
+  assert.deepEqual(events.filter(e => e === 'SETTLED' || e === 'CLEAR'), ['SETTLED', 'CLEAR']);
+  // Undoing a subsequent release before it settles cannot show a stale success.
+  sculptDrag(field); field.pointerUp(91); field.undoImprint(); events.length = 0;
+  for (let i = 0; i < 120; i++) field.update(1 / 60);
+  assert.equal(events.includes('SETTLED'), false);
+});
+
 test('pause feedback draws one sparse ring, expires, and cannot save while held', t => {
   let rings = 0;
   const context = new Proxy({}, { get: (_, key) => key === 'arc'
