@@ -55,6 +55,7 @@ export class ParticleField {
     this.handYaw = { value: 0, velocity: 0 }; this.handPitch = { value: 0, velocity: 0 };
     this.centerMotionX = { value: 0, velocity: 0 }; this.centerMotionY = { value: 0, velocity: 0 };
     this.focus = null; this.hand = null; this.pointers = new Map();
+    this.workspaceActive = true;
     this.mode = 'SCULPT'; this.sculptHeld = false; this.inputStartedAt = -Infinity;
     this.viewPointers = new Map(); this.viewYaw = 0; this.viewPitch = 0;
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -74,6 +75,7 @@ export class ParticleField {
   }
 
   resize() {
+    if (!this.workspaceActive) return;
     this.width = window.innerWidth; this.height = window.innerHeight;
     this.dpr = Math.min(devicePixelRatio || 1, this.mobile || this.width <= 800 ? MOBILE_PERFORMANCE.maxDPR : 2);
     const pixelWidth = Math.round(this.width * this.dpr), pixelHeight = Math.round(this.height * this.dpr);
@@ -98,7 +100,18 @@ export class ParticleField {
   setMode(mode, now = performance.now()) {
     if (mode !== 'SCULPT' && mode !== 'VIEW') throw new RangeError('Unknown interaction mode');
     if (mode === this.mode) return false;
-    this.mode = mode; this.inputStartedAt = now; this.sculptHeld = true;
+    this.mode = mode; this.holdInput(now);
+    this.projectAll(); this.draw();
+    return true;
+  }
+
+  setWorkspaceActive(active, now = performance.now()) {
+    if (active === this.workspaceActive) return;
+    this.workspaceActive = active; this.holdInput(now);
+  }
+
+  holdInput(now) {
+    this.inputStartedAt = now; this.sculptHeld = true;
     this.clearPointers(); this.hand = null; this.trace.hand(null, now);
     this.pendingGesture = null; this.lastResponseId = null;
     // Stop old motion without changing current positions, connectivity or pose.
@@ -108,8 +121,14 @@ export class ParticleField {
       for (const state of point.motion) state.velocity = 0;
     }
     this.last = 0; this.quality.resetTiming();
-    this.projectAll(); this.draw();
-    return true;
+  }
+
+  hasUnsavedShape() {
+    return this.memory.commits.length > 0 || this.form !== 'octahedron' || this.dispersion !== MOTION.deconstructionStrength ||
+      this.fragments.states.some(s => Math.abs(s.value) > 0.01) ||
+      this.weave.charge.some(v => v > 0.1) ||
+      this.points.some(p => p.scatter > 0.01) ||
+      [...this.memory.sessions.values()].some(s => s.motion.some(m => Math.abs(m.value) > 0.001));
   }
 
   setDispersion(value) {
@@ -165,7 +184,7 @@ export class ParticleField {
   }
 
   setHand(hand) {
-    if (this.mode !== 'SCULPT') return false;
+    if (!this.workspaceActive || this.mode !== 'SCULPT') return false;
     const sampledAt = hand?.sampledAt ?? hand?.dispatchedAt;
     if (Number.isFinite(sampledAt) && sampledAt < this.inputStartedAt) return false;
     if (this.sculptHeld) {
@@ -184,7 +203,7 @@ export class ParticleField {
   }
 
   pointerDown(id, x, y, now) {
-    if (now < this.inputStartedAt) return;
+    if (!this.workspaceActive || now < this.inputStartedAt) return;
     if (this.mode === 'VIEW') { this.viewPointers.set(id, { x, y }); return; }
     this.sculptHeld = false;
     const point = { x, y, time: now, quiet: 0, tearing: false };
@@ -208,7 +227,7 @@ export class ParticleField {
   }
 
   pointerMove(id, x, y, now) {
-    if (now < this.inputStartedAt) return;
+    if (!this.workspaceActive || now < this.inputStartedAt) return;
     if (this.mode === 'VIEW') {
       const previous = this.viewPointers.get(id);
       if (!previous) return;
@@ -273,7 +292,7 @@ export class ParticleField {
     const interval = this.last ? now - this.last : 1000 / 60;
     const dt = Math.max(0, Math.min(interval / 1000, 0.25));
     this.last = now;
-    if (!this.paused) {
+    if (this.workspaceActive && !this.paused) {
       const started = performance.now();
       if (this.mode === 'SCULPT' && !this.sculptHeld) this.time += dt;
       this.update(dt, now);
@@ -299,6 +318,7 @@ export class ParticleField {
   }
 
   update(dt, now = performance.now()) {
+    if (!this.workspaceActive) return;
     if (this.mode === 'VIEW' || this.sculptHeld) { this.projectAll(); return; }
     if (this.hand?.validUntil !== undefined && now > this.hand.validUntil) this.setHand(null);
     this.budget.advance(dt);

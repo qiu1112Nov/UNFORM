@@ -101,6 +101,36 @@ test('FLOW particles and woven skeleton project through the same bounded materia
   });
 });
 
+test('ORIGIN suspension preserves imprints and pose, blocks old touch/hand input, and resumes the same pool', t => {
+  const field = createField(t); slowSculpt(field); field.pointerUp(91);
+  const pool = field.points, memory = JSON.stringify(field.memory.commits);
+  field.setWorkspaceActive(false, 5000);
+  const snapshot = artworkState(field);
+  field.pointerDown(2, 180, 400, 5100); field.pointerMove(2, 250, 410, 5200);
+  assert.equal(field.setHand({ tracked: true, sampledAt: 5300, activation: 1 }), false);
+  for (let i = 0; i < 60; i++) field.animate(6000 + i * 16);
+  field.resize(); assert.equal(artworkState(field), snapshot);
+  assert.equal(field.pointers.size, 0); assert.equal(field.memory.commits.length, 1);
+  field.setWorkspaceActive(true, 10000);
+  field.pointerDown(2, 180, 400, 9000);
+  assert.equal(field.setHand({ tracked: true, sampledAt: 9999, activation: 1 }), false);
+  field.update(0.1, 10010); assert.equal(artworkState(field), snapshot);
+  const p = visiblePoints(field)[10]; field.pointerDown(3, p.x, p.y, 10100);
+  assert.equal(field.sculptHeld, false); assert.equal(field.pointers.size, 1);
+  assert.equal(field.points, pool); assert.equal(JSON.stringify(field.memory.commits), memory);
+});
+
+test('unsaved shape detection ignores idle rotation and VIEW, includes imprints and form edits', t => {
+  const field = createField(t); assert.equal(field.hasUnsavedShape(), false);
+  field.update(0.1); assert.equal(field.hasUnsavedShape(), false);
+  field.setMode('VIEW', 0); field.pointerDown(1, 100, 200, 10); field.pointerMove(1, 200, 220, 20);
+  assert.equal(field.hasUnsavedShape(), false);
+  field.setMode('SCULPT', 30); field.inputStartedAt = -Infinity; slowSculpt(field);
+  assert.equal(field.hasUnsavedShape(), true); field.reset();
+  assert.equal(field.hasUnsavedShape(), false);
+  field.setForm('grid'); assert.equal(field.hasUnsavedShape(), true);
+});
+
 test('a fast swipe after a stationary hold tears locally and particles recover', t => {
   const field = createField(t);
   assert.equal(field.count, 595); assert.equal(field.dpr, 1.5);

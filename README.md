@@ -2,6 +2,14 @@
 
 黑白极简的交互粒子雕塑。第一阶段以正八面体为主体，用真实三维坐标、自转与透视投影在 Canvas 2D 中绘制，保留原有摄像头与 Lines / Circle / Grid 功能。
 
+## 4.0 ORIGIN / GEOMETRY 入口
+
+首次打开 `/UNFORM/` 显示 **HOW WILL YOUR FORM BEGIN?**。GEOMETRY 是唯一可用入口，第一次点击才创建现有正八面体粒子场，默认 SCULPT；FUSION 为不可操作的 Coming Next 展示，本阶段无图片上传。
+
+CREATE 底部 **← ORIGIN** 和顶部 UNFORM 标识均可返回。有留痕、编织或其他形态修改时先确认；取消则继续创作。确认返回仍保留当前标签页的作品和观察状态，暂停模拟、取消活动输入并关闭摄像头。再次选择 GEOMETRY 继续同一作品，需要新的有效触控或手势，摄像头需主动重新开启。不会重新初始化粒子或自动 Restore。
+
+记忆尚未持久化，刷新或关闭页面仍会丢失。ORIGIN 在小屏与横屏可纵向滚动；CREATE 延用原有响应式布局、55% 解构强度、65% 惯性、SCULPT/VIEW、IMPRINT、Undo 和 Restore。GitHub Pages 和预览 Artifact 配置不变。
+
 ## 4.0 开发切片：SCULPT / VIEW
 
 独立开发分支 `feat/unform-4-sculpt-view`，仅实现模式与输入边界，沿用现有页面和渲染方案。

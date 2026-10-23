@@ -4,11 +4,20 @@ import { HandCamera } from './camera.js';
 import { gestureLabel } from './gesture-pipeline.js';
 import { MOTION } from './motion.js';
 import { IMPRINT } from './imprint.js';
+import { OriginFlow } from './origin.js';
 
 const $ = selector => document.querySelector(selector);
 const canvas = $('#particle-field');
 const status = $('#status');
-let field;
+let field, camera;
+function releaseCaptures() {
+  if (!field) return;
+  for (const id of [...field.pointers.keys(), ...field.viewPointers.keys()]) {
+    if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+  }
+}
+
+function initializeCreate() {
 try { field = new ParticleField(canvas); }
 catch { status.textContent = 'Canvas 2D is unavailable. Please use a modern browser with graphics support.'; }
 
@@ -64,11 +73,13 @@ if (field) {
     field.resize();
   });
   window.addEventListener('keydown', event => {
+    if (flow.screen !== 'CREATE') return;
     if (event.target.closest('button,input,a,textarea,select,[contenteditable]') || event.altKey || event.metaKey || event.ctrlKey) return;
     if (event.code === 'Space') { event.preventDefault(); pause.click(); }
     if (['1', '2', '3', '4'].includes(event.key)) setForm(['octahedron', 'lines', 'circle', 'grid'][Number(event.key) - 1]);
   });
   canvas.addEventListener('pointerdown', event => {
+    if (flow.screen !== 'CREATE') return;
     canvas.setPointerCapture(event.pointerId);
     field.pointerDown(event.pointerId, event.clientX, event.clientY, event.timeStamp);
   });
@@ -85,7 +96,7 @@ if (field) {
   canvas.addEventListener('contextmenu', event => event.preventDefault());
 
   const cameraButton = $('#camera-toggle');
-  const camera = new HandCamera($('#camera-video'), (state, message) => {
+  camera = new HandCamera($('#camera-video'), (state, message) => {
     if (state !== 'active') { field.inferenceMs = null; field.quality.recognitionPriority = false; }
     const enabled = state === 'loading' || state === 'active';
     cameraButton.setAttribute('aria-pressed', enabled);
@@ -108,9 +119,7 @@ if (field) {
     if (button.dataset.mode === field.mode) return;
     // End captures before discarding the associated pointer sessions. A held
     // finger/mouse must lift and press again after changing modes.
-    for (const id of [...field.pointers.keys(), ...field.viewPointers.keys()]) {
-      if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
-    }
+    releaseCaptures();
     field.setMode(button.dataset.mode);
     camera.resetGestureInput();
     field.quality.recognitionPriority = false;
@@ -142,7 +151,7 @@ if (field) {
     }, 250);
     window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
   }
-  cameraButton.addEventListener('click', () => { if (camera.requested) camera.stop(); else camera.start(); });
+  cameraButton.addEventListener('click', () => { if (flow.screen !== 'CREATE') return; if (camera.requested) camera.stop(); else camera.start(); });
   // Release camera hardware when leaving or hiding the page. Resume is explicit.
   window.addEventListener('pagehide', () => camera.stop());
   document.addEventListener('visibilitychange', () => { if (document.hidden && camera.requested) camera.stop('Camera paused while away. Enable it to resume.'); });
@@ -155,3 +164,47 @@ if (field) {
   window.addEventListener('keydown', event => { if (event.key === 'Escape' && !guide.hidden) { showGuide(false); guideButton.focus(); } });
   requestAnimationFrame(field.resize);
 }
+
+}
+
+const flow = new OriginFlow({
+  render(screen) {
+    const origin = screen === 'ORIGIN';
+    $('#origin-screen').hidden = !origin;
+    $('#create-screen').hidden = origin;
+    canvas.hidden = origin;
+    document.body.dataset.screen = screen;
+    document.title = origin ? 'UNFORM 4.0 — ORIGIN' : 'UNFORM 4.0 — CREATE / GEOMETRY';
+  },
+  enter(first) {
+    if (first) {
+      initializeCreate();
+      if (field) field.inputStartedAt = performance.now();
+      else return;
+    } else {
+      field?.setWorkspaceActive(true);
+      camera?.resetGestureInput();
+      if (field && (field.width !== innerWidth || field.height !== innerHeight)) field.resize();
+      status.textContent = field?.mode === 'VIEW' ? 'VIEW / Drag to look around. Your form is held.'
+        : 'SCULPT / Your form is kept. Begin a new touch or enable the camera to continue.';
+    }
+    if (field) {
+      $('#geometry-action').textContent = 'RESUME CREATE →';
+      $('#origin-draft').hidden = false;
+      document.querySelector('button[data-mode][aria-pressed="true"]').focus({ preventScroll: true });
+    }
+  },
+  leave() {
+    releaseCaptures();
+    field?.setWorkspaceActive(false);
+    camera?.stop();
+    $('#guide').hidden = true;
+    $('#guide-toggle').setAttribute('aria-expanded', 'false');
+    // Focus after the ORIGIN screen becomes visible.
+    queueMicrotask(() => $('#geometry-start').focus({ preventScroll: true }));
+  },
+  hasChanges: () => field?.hasUnsavedShape() ?? false,
+  confirmReturn: () => window.confirm('Return to ORIGIN? Your form has unsaved changes. It will stay in this tab, but refreshing or closing the page will lose it.'),
+});
+$('#geometry-start').addEventListener('click', () => flow.choose('GEOMETRY'));
+document.querySelectorAll('[data-origin-back]').forEach(button => button.addEventListener('click', () => flow.back()));
