@@ -209,7 +209,9 @@ test('a fast swipe after a stationary hold tears locally and particles recover',
   assert.ok(field.weave.damage.some(v => Math.abs(v - 0.55) < 1e-6));
   assert.ok(field.weave.damage.some(v => v === 0), 'distant structure is intact');
   assert.ok(field.points.some(p => p.scatter > 0.1));
+  assert.equal(field.pointers.get(1).intent, 'SCATTER');
   field.pointerUp(1);
+  assert.equal(field.memory.commits.length, 0, 'fast tear must never leave an imprint');
   for (let i = 0; i < 200; i++) field.update(1 / 60);
   assert.ok(field.points.every(p => p.scatter < 0.01));
   assert.ok(field.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
@@ -220,6 +222,61 @@ test('a fast swipe after a stationary hold tears locally and particles recover',
   assert.equal(field.form, 'octahedron'); assert.equal(field.dispersion, 0.55);
   assert.equal(field.inertia, 0.65);
   assert.ok(field.weave.charge.every(v => v === 0));
+});
+
+test('high-frequency fast swipe scatters with momentum and returns to the remembered form', t => {
+  const field = createField(t); sculptDrag(field); field.pointerUp(91); field.weave.clear();
+  for (let i = 0; i < 240; i++) field.update(1 / 60);
+  const memory = JSON.stringify(field.memory.commits);
+  const before = visiblePoints(field).map(p => [...p.world]);
+  const p = visiblePoints(field).find(p => p.kind === 'surface'), x = p.x, y = p.y;
+  field.pointerDown(8, x, y, 5000);
+  for (let i = 1; i <= 16; i++) field.pointerMove(8, x + i * 2, y, 5000 + i * 4);
+  assert.equal(field.pointers.get(8).intent, 'SCATTER');
+  assert.ok(field.points.some(p => p.scatter > 0.3));
+  assert.ok(field.points.some(p => p.scatterMotion.velocity > 1));
+  field.pointerUp(8);
+  assert.equal(JSON.stringify(field.memory.commits), memory);
+  field.update(1 / 60);
+  assert.ok(visiblePoints(field).some((p, i) => Math.hypot(...p.world.map((v, a) => v - before[i][a])) > 0.015));
+  for (let i = 0; i < 900; i++) field.update(1 / 60);
+  assert.ok(field.points.every(p => Math.abs(p.scatterMotion.value) < 0.0001));
+  assert.ok(visiblePoints(field).every((p, i) => Math.hypot(...p.world.map((v, a) => v - before[i][a])) < 0.008));
+  assert.equal(JSON.stringify(field.memory.commits), memory);
+});
+
+test('slow-to-fast cannot save, fast-to-slow cannot save, and the next fresh slow stroke still can', t => {
+  const field = createField(t); sculptDrag(field);
+  const p = field.pointers.get(91);
+  field.pointerMove(91, p.x + 50, p.y, p.time + 20);
+  const last = field.pointers.get(91); field.pointerMove(91, last.x + 5, last.y, last.time + 200);
+  field.pointerUp(91); assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91); assert.equal(field.memory.commits.length, 1);
+  field.undoImprint(); assert.equal(field.memory.commits.length, 0);
+  sculptDrag(field); field.pointerUp(91); field.reset(); assert.equal(field.memory.commits.length, 0);
+});
+
+test('high-frequency scatter classification stays immediate but expensive tear scans are frame-budgeted', t => {
+  const field = createField(t), p = visiblePoints(field)[20];
+  field.pointerDown(1, p.x, p.y, 0);
+  const x = p.x, y = p.y; let scans = 0;
+  field.tear = () => { scans++; };
+  for (let i = 1; i <= 100; i++) field.pointerMove(1, x + i * 2, y, i * 4);
+  assert.equal(field.pointers.get(1).intent, 'SCATTER'); field.pointerUp(1);
+  assert.ok(scans > 0 && scans <= 27, `unexpected number of scans: ${scans}`);
+  assert.equal(field.memory.commits.length, 0);
+});
+
+test('quick mouse/touch drags on legacy forms remain finite and cannot create octahedron imprints', t => {
+  const field = createField(t);
+  for (const form of ['lines', 'circle', 'grid']) {
+    field.setForm(form); field.update(0.1);
+    field.pointerDown(1, field.centerX, field.centerY, 0);
+    field.pointerMove(1, field.centerX + 90, field.centerY, 20); field.pointerUp(1);
+    for (let i = 0; i < 30; i++) field.update(1 / 60);
+    assert.ok(field.points.every(p => Number.isFinite(p.x) && Number.isFinite(p.y)));
+    assert.equal(field.memory.commits.length, 0);
+  }
 });
 
 test('FLOW STATE deconstructs vertices first and rebuilds the interior before edges and vertices', t => {

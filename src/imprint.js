@@ -68,6 +68,11 @@ export class ShapeMemory {
       s.blocked = true; s.dwell = 0; s.pulseAge = Infinity;
     }
   }
+  cancelStroke(id) {
+    const session = this.sessions.get(id);
+    if (session) { session.blocked = true; this.end(id); }
+    this.notice = null;
+  }
   cancelAll() { this.notice = null; for (const id of this.sessions.keys()) this.end(id); }
   update(dt, inertia, allowFeedback) {
     const activeCoefficients = springCoefficients(dt, inertia, IMPRINT.activeRate);

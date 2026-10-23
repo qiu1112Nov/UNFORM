@@ -23,15 +23,24 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
-      - name: Prepare site with /UNFORM/ directory
+      - name: Validate and package Cloudflare site root
         run: |
-          mkdir -p "$RUNNER_TEMP/unform-preview/UNFORM"
-          cp -a dist/. "$RUNNER_TEMP/unform-preview/UNFORM/"
-          test -f "$RUNNER_TEMP/unform-preview/UNFORM/index.html"
-      - name: Upload static preview (no deployment)
+          python3 scripts/package-preview.py --source dist --output "$RUNNER_TEMP/unform-preview/UNFORM-Cloudflare-preview.zip"
+      - name: Upload deployment ZIP inside Artifact (no deployment)
         uses: actions/upload-artifact@v4
         with:
           name: UNFORM-4-sculpt-view-static-preview
-          path: ${{ runner.temp }}/unform-preview/
+          path: ${{ runner.temp }}/unform-preview/UNFORM-Cloudflare-preview.zip
+          compression-level: 0
           if-no-files-found: error
           retention-days: 14
+      - name: Download and upload instructions
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          Download the single **UNFORM-4-sculpt-view-static-preview** Artifact.
+          Extract that outer GitHub ZIP once; upload **UNFORM-Cloudflare-preview.zip** to Cloudflare Pages.
+          The INNER ZIP is a site root: `_headers` plus `UNFORM/index.html`, `UNFORM/assets/`, and `UNFORM/mediapipe/`.
+          Do not upload the outer Artifact ZIP or add any enclosing directory. Do not rely on filename-based folders.
+          Check the Cloudflare file tree has `_headers` and `UNFORM/` directly at the root before publishing.
+          Open `/UNFORM/`; check `/UNFORM/preview-version.json` matches this run's commit.
+          SUMMARY

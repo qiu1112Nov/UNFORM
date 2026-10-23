@@ -1,0 +1,31 @@
+# Cloudflare Pages static assets only. This file is placed at the SITE ROOT.
+# See https://developers.cloudflare.com/pages/configuration/headers/
+/UNFORM
+  Cache-Control: no-store
+
+/UNFORM/
+  Cache-Control: no-store
+
+/UNFORM/index.html
+  Cache-Control: no-store
+
+/UNFORM/preview-version.json
+  Cache-Control: no-store
+
+/UNFORM/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/UNFORM/hand-worker.js
+  Cache-Control: no-cache
+
+/UNFORM/favicon.svg
+  Cache-Control: no-cache
+
+/UNFORM/mediapipe/*
+  Cache-Control: no-cache
+
+/UNFORM/mediapipe/wasm/*.wasm
+  Content-Type: application/wasm
+
+/UNFORM/mediapipe/vision_bundle.mjs
+  Content-Type: text/javascript

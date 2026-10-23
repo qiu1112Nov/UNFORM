@@ -5,6 +5,7 @@ import { advanceEdgeFlow, createEdgeFlow, FLOW_STATE, fragmentLayer, FragmentLay
 import { buildSurfaceMesh, nearestThread, octahedronParticle, segmentDistance, WeaveNetwork } from './octahedron.js';
 import { AdaptiveQuality, MOBILE_PERFORMANCE, ParticleBudget } from './performance.js';
 import { IMPRINT, ShapeMemory } from './imprint.js';
+import { SCULPT_INPUT, strokeIntent } from './sculpt-input.js';
 
 export class ParticleField {
   constructor(canvas) {
@@ -208,7 +209,7 @@ export class ParticleField {
     this.sculptHeld = false;
     this.memory.notice = null;
     this.onMemoryChange?.('INPUT');
-    const point = { x, y, time: now, quiet: 0, tearing: false };
+    const point = { x, y, time: now, quiet: 0, tearing: false, intent: 'SCULPT', fastCandidate: false };
     this.pointers.set(id, point); this.focus = point;
     if (this.form === 'octahedron') {
       let nearest = null, distance = Math.max(38, this.scale * 0.3);
@@ -248,16 +249,21 @@ export class ParticleField {
     this.focus = { x, y };
     if (!previous) return;
     const point = { x, y };
-    if (previous.basisX) {
+    const wasScattering = previous.intent === 'SCATTER';
+    const intent = this.form === 'octahedron' ? strokeIntent(previous, x, y, now) : previous.intent;
+    if (intent === 'SCATTER' && !wasScattering) this.onMemoryChange?.('SCATTER');
+    if (intent === 'SCULPT' && previous.basisX) {
       for (let a = 0; a < 3; a++) this.sculptOffset[a] = (x - previous.dragX) * previous.basisX[a] + (y - previous.dragY) * previous.basisY[a];
       this.memory.move(id, x, y, now, this.sculptOffset);
     }
     const distance = Math.hypot(x - previous.x, y - previous.y);
-    // A stationary hold can last seconds before the first move. Exclude dwell
-    // time so that the first fast swipe after a long press still tears threads.
-    const speed = distance / Math.max(8, Math.min(50, now - previous.time)) * 1000;
-    if (this.form === 'octahedron' && distance > 3 && speed > Math.max(330, this.scale * 3)) {
-      this.tear(previous, point);
+    if (this.form === 'octahedron' && intent === 'SCATTER') {
+      this.memory.cancelStroke(id);
+      if (!wasScattering) { previous.tearX = previous.x; previous.tearY = previous.y; previous.tearTime = -Infinity; }
+      if (distance > 0 && now - previous.tearTime >= SCULPT_INPUT.scatterSampleMs) {
+        this.tear({ x: previous.tearX, y: previous.tearY }, point);
+        previous.tearX = x; previous.tearY = y; previous.tearTime = now;
+      }
       this.weave.cancel(id); previous.tearing = true; previous.quiet = 0;
     }
     previous.x = x; previous.y = y; previous.time = now;
@@ -265,10 +271,16 @@ export class ParticleField {
 
   pointerUp(id, cancelled = false) {
     if (this.mode === 'VIEW') { this.viewPointers.delete(id); return; }
-    const commit = !cancelled && this.workspaceActive && this.form === 'octahedron' && this.pointers.size === 1;
+    const pointer = this.pointers.get(id);
+    const scattering = pointer?.intent === 'SCATTER';
+    if (scattering && !cancelled && this.workspaceActive && (pointer.x !== pointer.tearX || pointer.y !== pointer.tearY)) {
+      this.tear({ x: pointer.tearX, y: pointer.tearY }, pointer);
+    }
+    const commit = !cancelled && !scattering && this.workspaceActive && this.form === 'octahedron' && this.pointers.size === 1;
     if (this.memory.end(id, commit)) this.onMemoryChange?.('COMMIT');
     else if (this.memory.sessions.get(id)?.stage === 'LIMIT') this.onMemoryChange?.('LIMIT');
-    if (cancelled) this.weave.cancel(id); else this.weave.release(id);
+    if (scattering) this.onMemoryChange?.('SCATTER_END');
+    if (cancelled || scattering) this.weave.cancel(id); else this.weave.release(id);
     this.pointers.delete(id);
     this.focus = this.pointers.size ? [...this.pointers.values()][0] : null;
   }
@@ -290,6 +302,7 @@ export class ParticleField {
       const p = this.points[this.budget.indices[slot]];
       const weight = clamp(1 - segmentDistance(p.x, p.y, a, b) / (radius * 1.4));
       p.scatter = Math.max(p.scatter, weight * 0.7);
+      p.scatterMotion.velocity = Math.max(p.scatterMotion.velocity, weight * SCULPT_INPUT.scatterVelocity);
     }
   }
 
@@ -338,7 +351,7 @@ export class ParticleField {
     };
     for (const [id, point] of this.pointers) {
       point.quiet += dt;
-      if (point.tearing && point.quiet > 0.4) {
+      if (point.tearing && point.intent !== 'SCATTER' && point.quiet > 0.4) {
         point.tearing = false;
         const node = this.nearestNode(point);
         if (node >= 0) this.weave.begin(id, node);

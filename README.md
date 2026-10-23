@@ -22,6 +22,48 @@ CREATE 底部 **← ORIGIN** 和顶部 UNFORM 标识均可返回。有留痕、�
 
 相关测试、完整 `npm test`、生产构建通过；展开运行共 97 项用例通过。浏览器检查覆盖原生触摸、暂停观察、切换捕获释放、摄像头在途帧隔离、手机横竖屏、桌面及生产资源路径。安卓真机的触感和持续性能仍需体验确认。没有创建 PR、合并或部署。
 
+## SCULPT 2.2：慢拖留痕，快划打散
+
+在正八面体上慢速拖动，保持 SCULPT 2.1 的增益、范围和弹簧响应；正常松手立即提交一条 IMPRINT。快速滑动进入互斥的 SCATTER：按 CSS 像素速度约 420px/s 和至少 6px 连续方向位移判定，触控与鼠标共用。高频小步事件可累计识别；极小抖动不能触发。一次触控只要进入打散，之后即使变慢或停顿，松手也不会留痕；下一次重新按下才能塑形保存。
+
+打散沿路径局部断线，给粒子瞬时速度后由现有惯性扩散、回聚，始终保留已有局部形态记忆及历史。最初触发立即处理，后续全粒子扫描按约 16ms 限流并在松手补齐末段，避免高频触屏事件重复扫描。参数集中在 `src/sculpt-input.js`，55% 解构、65% 惯性不变。VIEW 只观察，Undo/Restore、ORIGIN 和摄像头仍沿用原逻辑。
+
+## Cloudflare 专用预览包：明确区分两层 ZIP
+
+工作流仍只在 `feat/unform-4-sculpt-view` 推送时生成 Artifact，不自动部署。需要 Python 3 进行打包及相关测试（GitHub Ubuntu runner 已提供）。`npm run build` 后，工作流执行 `python3 scripts/package-preview.py --source dist --output <输出目录>/UNFORM-Cloudflare-preview.zip`。
+
+手机操作：
+
+1. 登录 GitHub，进入对应提交的成功 Actions 记录，下载单个 **UNFORM-4-sculpt-view-static-preview** Artifact。外层通常为 `UNFORM-4-sculpt-view-static-preview.zip`，不要使用下载全部 Artifacts 的总包。
+2. **只解压外层一次，取出内层 `UNFORM-Cloudflare-preview.zip`。上传这个内层 ZIP 原文件**，不是外层 Artifact ZIP，也不是手机解压工具生成的同名文件夹。内层不需要重命名；不依赖 ZIP 名称自动创建目录。
+3. 在 Cloudflare Pages 手动上传前后核对文件树，站点根必须直接有 `_headers` 和 `UNFORM/`，后者内部包含 `index.html`、`assets/`、`hand-worker.js`、`mediapipe/`、`preview-version.json`。若上传器额外套目录，应改为上传解压后的站点根内容（`_headers` 与 `UNFORM/` 一起）或使用电脑上传；不要在错误目录树下继续发布。
+4. 发布后打开 `https://<你的项目>.pages.dev/UNFORM/`。现有项目的目标地址为 `https://unform-4-preview.pages.dev/UNFORM/`；这里是操作目标，不表示本轮已经部署验证。
+5. 打开 `/UNFORM/preview-version.json`，核对 `commit` 与所选 Actions SHA 一致。记录还包含构建时间及资源 SHA-256，帮助区分旧部署和旧缓存。本地未提交打包标记为 `local-working-tree`。
+
+真正上传包的目录结构：
+
+```text
+UNFORM-Cloudflare-preview.zip
+├── _headers
+└── UNFORM/
+    ├── index.html
+    ├── assets/                     # 带内容哈希的 JS/CSS
+    ├── hand-worker.js
+    ├── mediapipe/                  # vision_bundle.mjs、SIMD/非 SIMD WASM/JS
+    ├── favicon.svg
+    └── preview-version.json
+```
+
+打包器检查 ZIP 完整性、所有文件字节、唯一站点根结构、HTML 的 `/UNFORM/` 资源引用、哈希入口、动态模块、Worker 和 WASM 文件及内容。文件缺失、JS/WASM 实际为 HTML 回退、错误 base 时构建会失败。本地 HTTP 验证可检查实际 MIME；最终 Cloudflare 的响应类型和目录仍需部署后检查，不能只看 200。JS 应为 JavaScript、CSS 为 `text/css`、WASM 为 `application/wasm` 且以 WASM 魔数开头，不能返回 HTML。
+
+### 预览缓存规则与排查
+
+专用包根目录的 `_headers` 来自 `scripts/cloudflare-preview.headers`，依据 [Cloudflare Pages 官方 Headers 规则](https://developers.cloudflare.com/pages/configuration/headers/)：它对静态资源响应生效，不适用于 Pages Functions。`/UNFORM`、`/UNFORM/`、`/UNFORM/index.html`、`/UNFORM/preview-version.json` 采用 `Cache-Control: no-store`；仅 `/UNFORM/assets/*` 的哈希资源采用一年 immutable 缓存；固定名称的 Worker、favicon、MediaPipe 采用 `no-cache`，允许缓存但每次重新验证。WASM 和本地 MediaPipe 模块额外声明正确 MIME。规则没有把整个 `/UNFORM/*` 缓存为 immutable，避免固定名称文件长期过期。
+
+这些规则只写进 Cloudflare 内层 ZIP，**不写入 `dist` 或 `public`**，不修改 Vite base 或正式 GitHub Pages 工作流。新响应头无法追溯清除浏览器已存的旧 HTML；更新后可先用 `/UNFORM/?v=<本次提交SHA>` 测试，再刷新或清理该站点缓存，并核对版本 JSON。项目没有注册 Service Worker；仍需确认 Cloudflare 仪表盘是否存在额外 Cache Rules/旧部署、手机是否上传了正确 ZIP。普通窗口与无痕结果不同并不能单独证明根因，不能以“改名 ZIP”替代这些检查。
+
+本地测试不等于 Cloudflare 实际执行 `_headers`。手机上传解压目录、真实 HTTPS 响应头、浏览器旧缓存清理和账号级缓存规则都必须上线后验证；本轮不部署、不宣称线上问题已解决。
+
 ## SCULPT 2.1 塑形表现力
 
 保留松手立即留痕。针对短拖动，局部拖动增益由 1 提至 1.35，影响半径由 0.55 调至 0.62，按住时的弹簧速率由 1.3 提至 1.8；松手速率仍为 1.3。沿用中心强、边缘平滑归零的平方衰减场，粒子、FLOW 与骨架共用。60% 留存比例、0.32 拖动上限、0.24 总偏移上限、55% 解构及 65% 惯性不变。
@@ -34,7 +76,7 @@ SCULPT 下在雕塑上有效拖动后正常松手即提交 IMPRINT，不再等�
 
 原始坐标保持不变；独立的物体空间局部位移场同时作用于粒子、棱线 FLOW 和编织骨架。偏移有范围和幅度限制，保留 55% 解构强度、65% 惯性及原有摄像头路径。VIEW 冻结观察且不提交留痕；返回 SCULPT 需要新输入。切换形态保留正八面体记忆，其他形态不应用它。
 
-停止明显移动约 0.55 秒会出现一次低透明度白色环形脉冲，0.45 秒后消失；仅为反馈，不写历史，不是保存条件。多次停顿不创建历史，正常松手最多提交一条。快速有效拖动也可松手留痕。
+停止明显移动约 0.55 秒会出现一次低透明度白色环形脉冲，0.45 秒后消失；仅为反馈，不写历史，不是保存条件。多次停顿不创建历史，正常松手最多提交一条。SCULPT 2.2 中快速滑动改为不保存的 SCATTER；慢拖仍无需等待。
 
 控件 ↶ / **Undo last imprint** 撤销最近一次已完成留痕；原 Reset 图标现为 **Restore original form**，清除全部记忆并恢复初始形态。两者在 VIEW 禁用。取消/失去指针捕获/切换 VIEW/返回 ORIGIN 不会提交未完成留痕，已完成留痕不因此删除。任何多指参与会取消整次连续触控的提交资格，最后一根手指松开也不保存；全部抬起后新单指操作才能留痕。摄像头仍只驱动已有动态，不生成触控留痕历史。
 

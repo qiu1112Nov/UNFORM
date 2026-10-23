@@ -36,7 +36,9 @@ if (field) {
     // for the latest local spring to settle; no timer can overwrite newer input.
     if (action === 'COMMIT') return;
     status.textContent = action === 'SETTLED' ? `IMPRINT / Local shape remembered (${field.memory.commits.length}/${IMPRINT.maxCommits}).`
-      : action === 'INPUT' || action === 'CLEAR' ? 'SCULPT / Drag to shape. Release to imprint.'
+      : action === 'SCATTER' ? 'SCATTER / Release to reform. No imprint will be saved.'
+      : action === 'SCATTER_END' ? 'SCULPT / Returning to your remembered form.'
+      : action === 'INPUT' || action === 'CLEAR' ? 'SCULPT / Slow drag to shape. Swipe to scatter.'
       : action === 'UNDO' ? 'UNDO / Last imprint removed.'
       : action === 'LIMIT' ? 'IMPRINT / Memory is full. Undo or Restore to make room.' : 'RESTORE / Original form restored.';
   };
