@@ -8,7 +8,7 @@ import { densityImage } from './helpers/density-fixtures.js';
 const fast = { yieldTask: async () => {} };
 const make = (name, options = {}) => new TranslationJob().run(densityImage(name), { ...fast, ...options });
 
-test('ring retains its density hole inside the mandatory geometric scaffold', async () => {
+test('ring retains its density hole inside the implicit directional volume without a visible scaffold', async () => {
   const m = await make('ring');
   const image = m.cached.filter(p=>!p.pinned);
   const ring = image.filter(p=>{const r=Math.hypot((p.uv[0]-.5)*2,(p.uv[1]-.5)*2);return r>.36&&r<.76;}).length;

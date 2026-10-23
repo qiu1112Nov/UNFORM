@@ -1,11 +1,13 @@
 import { OCTAHEDRON_BASE, GEOMETRY_CONSTRAINT } from './base-topology.js';
 
-// Geometry is a reference only; visible nodes and topology come from the image.
+// Image samples remain the visible nodes. The base guides volume and local
+// directions, but never contributes a separate wireframe or reserved nodes.
 export const DENSITY_FIELD = Object.freeze({
   weights: Object.freeze({ silhouette: .55, contour: 1.4, contrast: .65, structure: .5, corner: .8, center: .15 }),
   mobile: Object.freeze({ lines: 720, faces: 14, glyphs: 24 }),
   desktop: Object.freeze({ lines: 1600, faces: 28, glyphs: 48 }),
-  referenceMix: .12, maxRadius: 1.55,
+  referenceMix: .74, depthMix: .86, ridgeFraction: .2, ridgePull: .42,
+  ridgeMaxOffset: .15, faceAlignment: .86, maxRadius: 1.55,
   degree: 4, candidates: 48, faceAreaRatio: .035, isolatedFraction: .12,
 });
 const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
@@ -19,6 +21,29 @@ const NEIGHBORS = [];
 for (let x=-1;x<=1;x++) for (let y=-1;y<=1;y++) for (let z=-1;z<=1;z++) NEIGHBORS.push([x,y,z]);
 NEIGHBORS.sort((a,b)=>a[0]**2+a[1]**2+a[2]**2-b[0]**2-b[1]**2-b[2]**2);
 const wait = () => new Promise(resolve => setTimeout(resolve, 0));
+
+// Closest finite reference edge, used to bend existing image samples and rank
+// local links. Endpoints are deliberately excluded: no fixed vertex is inserted.
+function edgeGuide(point, guides) {
+  let edge=0, bestT=0, distance=Infinity;
+  for (let i=0;i<guides.length;i++) {
+    const {a,direction:d,length2}=guides[i];
+    const t=clamp(((point[0]-a[0])*d[0]+(point[1]-a[1])*d[1]+(point[2]-a[2])*d[2])/length2,.12,.88);
+    const separation=Math.hypot(point[0]-a[0]-d[0]*t,point[1]-a[1]-d[1]*t,point[2]-a[2]-d[2]*t);
+    if(separation<distance){edge=i;bestT=t;distance=separation;}
+  }
+  const {a,direction}=guides[edge];
+  return {edge,direction,distance,target:a.map((v,axis)=>v+direction[axis]*bestT)};
+}
+
+function faceNormals(base) {
+  return base.faces.map(([i,j,k]) => {
+    const a=base.vertices[i], b=base.vertices[j].map((v,d)=>v-a[d]), c=base.vertices[k].map((v,d)=>v-a[d]);
+    const normal=[b[1]*c[2]-b[2]*c[1],b[2]*c[0]-b[0]*c[2],b[0]*c[1]-b[1]*c[0]];
+    const length=Math.hypot(...normal);
+    return normal.map(v=>v/length);
+  });
+}
 
 function blur(source, n, radius) {
   const temp = new Float32Array(source.length), out = new Float32Array(source.length);
@@ -119,7 +144,15 @@ export async function buildDensityField(features, { signal, yieldTask = wait, pr
 }
 
 export class DensityMaterial {
-  constructor(features, field, seed = 1, base = OCTAHEDRON_BASE) { this.features = features; this.field = field; this.seed = seed; this.base = base; this.densityField = true; }
+  constructor(features, field, seed = 1, base = OCTAHEDRON_BASE) {
+    this.features = features; this.field = field; this.seed = seed; this.base = base; this.densityField = true;
+    // Shared immutable direction data, computed once during translation, never
+    // in the renderer or once per edge candidate.
+    this.edgeGuides=base.edges.map(([i,j])=>{
+      const a=base.vertices[i],direction=base.vertices[j].map((v,d)=>v-a[d]);
+      return {a,direction,length2:direction.reduce((s,v)=>s+v*v,0)};
+    });
+  }
   map(point, out = new Float64Array(3)) { for (let i = 0; i < 3; i++) out[i] = point[i]; return out; }
   sample(index, count) {
     if (count !== this.cachedCount || !this.cached) throw new Error('Prepare the density graph before entering CREATE.');
@@ -127,14 +160,18 @@ export class DensityMaterial {
   }
   embed(u, v, depth, cell) {
     const f=this.field, sx=(u-.5)*2, sy=(.5-v)*2;
-    // Continuous, feature-dependent thickness: no parallel slab faces, constant
-    // box extrusion, or equal-radius spherical shell. XY retains image silhouette.
+    // Diamond directions replace the mostly rectangular image plane; the base's
+    // piecewise-linear depth supplies triangular roof planes instead of a dome.
+    // Image density still chooses every UV and modulates thickness locally.
     const taper=.35+.65*Math.exp(-(sx*sx+sy*sy)*1.15);
     const thickness=(.18+.24*f.foreground[cell]+.14*f.density[cell]+.08*f.coarse[cell])*taper;
     const image=[sx*.94,sy*.94,depth*thickness+(f.coarse[cell]-this.features.mean)*.06];
     const guide=this.base.embedImage(u,v,depth);
-    const blend=f.flat?0:DENSITY_FIELD.referenceMix*(.25+.75*f.coherence[cell]);
-    return image.map((value,a)=>value*(1-blend)+guide[a]*blend);
+    const blend=DENSITY_FIELD.referenceMix;
+    const relief=.88+.12*f.density[cell];
+    return [image[0]*(1-blend)+guide[0]*blend,
+      image[1]*(1-blend)+guide[1]*blend,
+      image[2]*(1-DENSITY_FIELD.depthMix)+guide[2]*DENSITY_FIELD.depthMix*relief];
   }
   deform(point, u, v, cell) {
     const f=this.field, strength=f.flat?0:f.contour[cell], angle=f.tangent[cell];
@@ -170,6 +207,14 @@ export class DensityMaterial {
       const side = random(i, 25) < .5 ? -1 : 1;
       const depth=interior?(random(i,27)*2-1)*.7:side*(.45+.55*random(i,29));
       const canonical=this.embed(u,v,depth,cell);
+      const guide=edgeGuide(canonical,this.edgeGuides);
+      const ridge=!interior&&!f.flat&&edge>.18&&random(i,this.seed+43)<DENSITY_FIELD.ridgeFraction;
+      // Only image-supported, disconnected portions borrow an edge direction.
+      // The bounded pull cannot replace the image with twelve preset chains.
+      if(ridge){
+        const pull=Math.min(DENSITY_FIELD.ridgePull,DENSITY_FIELD.ridgeMaxOffset/(guide.distance||1));
+        for(let axis=0;axis<3;axis++)canonical[axis]+=(guide.target[axis]-canonical[axis])*pull;
+      }
       const point=this.deform(canonical,u,v,cell);
       const angle=f.tangent[cell];
       let glyph = 'point';
@@ -179,7 +224,8 @@ export class DensityMaterial {
         if (glyph !== 'point') glyphs++;
       }
       samples[i] = { point, canonical, density: f.density[cell], cell, uv: [u, v],
-        kind: interior ? 'interior' : edge > .3 ? 'edge' : 'surface', glyph, tangent: -angle, coherence: coherent, corner: important };
+        kind: interior ? 'interior' : edge > .3 ? 'edge' : 'surface', glyph, tangent: -angle, coherence: coherent, corner: important,
+        ridge, referenceEdge:guide.edge, referenceDirection:guide.direction };
       if (i % 64 === 63 || i === count - 1) { progress('STRUCTURE', .8 + .12 * (i + 1) / count); await yieldTask(); }
     }
     this.cached = samples; this.cachedCount = count;
@@ -223,9 +269,13 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
         const b = nodes[j], vx = b[0] - a[0], vy = b[1] - a[1], vz = b[2] - a[2], d = Math.hypot(vx, vy, vz);
         const radius = .11 + (1 - Math.min(p.density, q.density)) * .12;
         if (d < .018 || d > radius || Math.abs(vz) > .13) continue;
-        const alignment = Math.abs((vx * Math.cos(p.tangent) + vy * Math.sin(p.tangent)) / d);
+        const imageAlignment = Math.abs((vx * Math.cos(p.tangent) + vy * Math.sin(p.tangent)) / d);
+        const direction=p.referenceDirection;
+        const ridgeAlignment=direction?Math.abs((vx*direction[0]+vy*direction[1]+vz*direction[2])/(d*Math.hypot(...direction))):0;
+        const directional=(p.ridge||q.ridge)&&p.referenceEdge===q.referenceEdge;
+        const alignment=directional?Math.max(imageAlignment,ridgeAlignment):imageAlignment;
         if (p.kind === 'edge' && p.coherence > .5 && alignment < .28) continue;
-        candidates.push({ j, d, score: d / (.6 + alignment * .4) });
+        candidates.push({ j, d, score: d / (.6 + alignment * .4 + (directional?ridgeAlignment*.5:0)) });
       }
     }
     candidates.sort((a, b) => a.score - b.score);
@@ -241,6 +291,7 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
   }
   const xs = nodes.map(p => p[0]), ys = nodes.map(p => p[1]);
   const footprint = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+  const normals=reference?faceNormals(reference):null;
   let areaSum = 0;
   for (let i = 0; i < nodes.length && triangles.length < limits.faces; i++) {
     check(signal);
@@ -251,7 +302,9 @@ export async function buildTopology(samples, limits, { signal, yieldTask = wait,
       const direction = Math.abs(Math.cos(p.tangent - q.tangent)) * Math.abs(Math.cos(p.tangent - r.tangent));
       if (density < .18 || density > .9 || coherence < .22 || direction < .4) continue;
       const a = nodes[i], b = nodes[j], c = nodes[k], ab = b.map((v, d) => v - a[d]), ac = c.map((v, d) => v - a[d]);
-      const area = Math.hypot(ab[1]*ac[2]-ab[2]*ac[1], ab[2]*ac[0]-ab[0]*ac[2], ab[0]*ac[1]-ab[1]*ac[0]) / 2;
+      const normal=[ab[1]*ac[2]-ab[2]*ac[1], ab[2]*ac[0]-ab[0]*ac[2], ab[0]*ac[1]-ab[1]*ac[0]];
+      const normalLength=Math.hypot(...normal),area=normalLength/2;
+      if(normals&&!normals.some(n=>Math.abs(n.reduce((sum,v,a)=>sum+v*normal[a],0))/normalLength>=DENSITY_FIELD.faceAlignment))continue;
       const longest = Math.max(Math.hypot(...ab), Math.hypot(...ac), Math.hypot(...b.map((v,d)=>v-c[d])));
       if (area < .0003 || area > .008 || area / longest ** 2 < .12 || areaSum + area > footprint * DENSITY_FIELD.faceAreaRatio) continue;
       triangles.push([i,j,k]); faceWeights.push(coherence * direction); areaSum += area;
