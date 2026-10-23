@@ -1,26 +1,38 @@
-# UNFORM 3.2.3 — DIRECT RESPONSE
+# UNFORM 4.0 — FUSION & Interactive Geometry
 
-黑白极简的交互粒子雕塑。第一阶段以正八面体为主体，用真实三维坐标、自转与透视投影在 Canvas 2D 中绘制，保留原有摄像头与 Lines / Circle / Grid 功能。
+通过动作塑造生成式数字材料的黑白交互作品。GEOMETRY 从正八面体开始，FUSION 3.0 将本地图片的轮廓、明暗、视觉重心和多尺度密度场转译为三维点线面结构；两条路径进入同一个 CREATE 空间，复用 Canvas 2D 三维投影、SCULPT / VIEW、触控与可选摄像头输入。
+
+## 4.0 功能与验收状态
+
+- **GEOMETRY / FUSION**：默认几何入口与本地图片导入、预览、裁切、分析、重新生成均已开放。图片和视频只在当前浏览器处理，不上传到服务器。
+- **Density Field**：保留图像驱动的疏密、轮廓和负空间，以隐性八面体方向、局部斜向连接、共享节点的稀疏三角面和前后深度建立三维结构，不显示完整预设八面体外框。
+- **SCULPT / VIEW**：慢拖塑形，有效塑形后松手自动留痕；VIEW 拖动只观察。连续快速滑动打散后回到已保存形态，不新增留痕历史；Undo / Restore 分别撤销最近留痕和恢复当前作品初始形态。
+- **双作品状态隔离**：GEOMETRY 与 FUSION 分别保留粒子、留痕、撤销和观察状态，切换不覆盖另一件作品。状态仅保存在当前页面会话，刷新或关闭页面会丢失；尚未提供作品文件持久化或静态图片保存。
+- **性能与动态**：保留 FLOW / FRAGMENT / TRACE、55% 解构强度、65% 惯性、移动端自适应粒子/DPR/拖尾预算，以及 Worker 优先、串行推理和失败回退。
+
+发布前自动化基线为 **215 项测试**，生产构建和 `/UNFORM/` 静态资源检查通过。受控 Chromium 检查覆盖桌面和手机视口，不能替代手机硬件验收。用户已通过 Cloudflare 手动预览验证 GEOMETRY、FUSION、SCULPT、VIEW、松手留痕、Undo 和连续快速滑动打散；最近确认斜向连接与空间顶点可见，三维厚度仍稍扁，本轮接受并保持算法不变。全部交互的最终真机回归尚未完成。
+
+**摄像头手机/平板真机验收仍待完成。** 本次按用户决定先提交 4.0 发布 PR，后续补测真实张掌/握拳、快速反向、持续交互、Worker 回退及性能。云端 Chromium 曾因模型下载证书信任错误无法完成真实推理；摄像头不可用时仍保留鼠标/触控。测试通过不表示摄像头已在目标真机验收，也不表示 4.0 已合并或部署到 GitHub Pages。
 
 ## 4.0 ORIGIN / GEOMETRY 入口
 
-首次打开 `/UNFORM/` 显示 **HOW WILL YOUR FORM BEGIN?**。GEOMETRY 是唯一可用入口，第一次点击才创建现有正八面体粒子场，默认 SCULPT；FUSION 为不可操作的 Coming Next 展示，本阶段无图片上传。
+首次打开 `/UNFORM/` 显示 **HOW WILL YOUR FORM BEGIN?**。GEOMETRY 是默认入口，第一次点击创建正八面体粒子场并进入 SCULPT；FUSION 打开本地图片选择、预览与裁切，确认后进入 TRANSLATE。分析和生成完成后，用户进入 CREATE / VIEW，再按需切换 SCULPT。
 
 CREATE 底部 **← ORIGIN** 和顶部 UNFORM 标识均可返回。有留痕、编织或其他形态修改时先确认；取消则继续创作。确认返回仍保留当前标签页的作品和观察状态，暂停模拟、取消活动输入并关闭摄像头。再次选择 GEOMETRY 继续同一作品，需要新的有效触控或手势，摄像头需主动重新开启。不会重新初始化粒子或自动 Restore。
 
 记忆尚未持久化，刷新或关闭页面仍会丢失。ORIGIN 在小屏与横屏可纵向滚动；CREATE 延用原有响应式布局、55% 解构强度、65% 惯性、SCULPT/VIEW、IMPRINT、Undo 和 Restore。GitHub Pages 和预览 Artifact 配置不变。
 
-## 4.0 开发切片：SCULPT / VIEW
+## 4.0 创作空间：SCULPT / VIEW
 
-独立开发分支 `feat/unform-4-sculpt-view`，仅实现模式与输入边界，沿用现有页面和渲染方案。
+独立开发分支 `feat/unform-4-sculpt-view` 包含本次 4.0 更新，沿用现有渲染引擎，以模式和统一输入边界保护作品。
 
-- 默认 **SCULPT**，原有鼠标/触控编织、撕裂、多点触控、手势预响应、形态与参数控制保持可用。
+- GEOMETRY 默认 **SCULPT**，FUSION 生成后从 **VIEW** 进入；切换 SCULPT 后可使用原有鼠标/触控塑形、编织、撕裂、多点触控、手势预响应、形态与参数控制。
 - 点击 **VIEW** 保持当前形态；用鼠标或一根手指拖动观察三维作品，暂停动画时也可观察。此时停止形态模拟及自转，形态按钮、解构滑块与 Reset 禁用，摄像头识别继续运行但不写入作品。
 - 切换会结束活动输入并释放指针捕获，保留形态与观察角度。返回 SCULPT 后等待新的按下操作、显式编辑操作或切换后采集的有效手部结果；旧拖动、旧确认状态及在途推理结果不会跨模式继续塑形。
 - 观察时固定当前可见粒子预算以保持快照一致；性能诊断继续更新。SCULPT 恢复输入后继续原有自适应质量策略，粒子/DPR/TRACE 预算与推理频率配置不变。
 - 运行 `npm run dev`，打开终端显示的 `/UNFORM/` 地址预览。摄像头沿用 HTTPS/localhost 限制。
 
-相关测试、完整 `npm test`、生产构建通过；展开运行共 97 项用例通过。浏览器检查覆盖原生触摸、暂停观察、切换捕获释放、摄像头在途帧隔离、手机横竖屏、桌面及生产资源路径。安卓真机的触感和持续性能仍需体验确认。没有创建 PR、合并或部署。
+当前完整测试套件覆盖模式切换、暂停观察、输入结束与重新开始、摄像头在途帧隔离、手机横竖屏尺寸以及生产资源路径。真机状态以本 README 顶部的 4.0 验收说明为准。
 
 ## SCULPT 2.2：慢拖留痕，快划打散
 
@@ -82,7 +94,9 @@ SCULPT 下在雕塑上有效拖动后正常松手即提交 IMPRINT，不再等�
 
 参数集中在 `src/imprint.js` 的 `IMPRINT`。当前最多 24 次留痕、4 个活动输入及最多 24 个回弹缓冲，仅单指拖动可提交；每次按下最多提交一次。记忆只存在于当前页面会话，刷新会丢失，尚无作品持久化。暂停动画时不累计停顿反馈；正常松手提交不依赖动画帧。达到 24 次上限后需先 Undo 或 Restore 才能继续新增留痕。安卓真机的可见度、误触和长时间性能仍需验证。
 
-## 3.2.3 连续直接响应
+## 历史实现记录：3.2.3 连续直接响应
+
+以下 3.x 章节保留当时的实现背景、阶段测试数量与局限。当前交互和验收状态以顶部的 4.0、SCULPT 2.2、IMPRINT 2.0 和 FUSION 3.0 说明为准。
 
 基于 main `c80f5fa`，修复“预响应 → 回退 → 正式响应”的双重位移。原先把正式分层进度与快速消退的附加位移相加；现在预响应直接推进同一组分层弹簧，确认只改变目标，保留位置与速度。等待正式启动的层保持/接近预响应位置，不返回初始形态。移除确认后的额外 180ms 目标锁存，已确认状态仍保持至明确反向或持续失去追踪；短暂 unknown/no-hand 保留最近可信意图。
 
@@ -173,11 +187,13 @@ npm run build    # 生成 dist/，包含本地 WASM 资源
 npm run preview  # 本地检查生产构建
 ```
 
-## 交互
+## 当前交互
 
-- **鼠标 / 单指触摸**：在正八面体附近触摸或按住开始局部编织；按住约 2–6 秒可观察虚线逐渐连接并向其他面蔓延。快速划过以打断连接、散开粒子，释放后重聚。只有按住滑动才会打断，悬停不触发。
-- **多点触摸**：最多两个编织传播源；双指距离也控制全局分散程度，靠拢聚合、分开扩散。系统取消触摸、窗口失焦或切后台会清理按压状态。
-- **形态**：Octa 为默认正八面体；Lines 为波形线列，Circle 为旋转球壳，Grid 为几何网格，切换时平滑重组。
+- **鼠标 / 单指触摸**：SCULPT 下慢拖局部塑形，有效形变在正常松手时留痕。停顿约 0.55 秒的轻微脉冲仅作反馈；连续快速滑动只打散、不保存。悬停不触发打散。
+- **VIEW**：鼠标或单指拖动只旋转观察，不修改作品。回到 SCULPT 后需新输入；模式切换会结束旧拖动，不意外提交留痕。
+- **Undo / Restore**：撤销最近一次留痕／恢复当前作品的初始形态；FUSION 恢复到本次转译结果。两者在 VIEW 禁用。
+- **多点触摸**：保留原有编织与双指分散控制；多指参与会取消该次连续触控的留痕资格。系统取消触摸、窗口失焦或切后台会清理按压状态。
+- **形态**：GEOMETRY 默认 Octa 正八面体，保留 Lines / Circle / Grid；FUSION 使用图像驱动的 Field 及其共享拓扑。
 - **Deconstruction**：手动调整解构强度；复位恢复正八面体、55% 解构强度、65% 运动惯性，并清除编织痕迹。粒子运动继续平滑回到结构中。
 - **暂停**：暂停/继续动画与编织。无控件焦点时，Space 切换暂停，1–4 依次选择 Octa / Lines / Circle / Grid。系统选择“减少动态效果”时默认暂停，需主动播放以启用动态编织。
 - **摄像头**：点击 Enable camera 后才请求权限。张掌扩散，握拳聚合，移动手部控制场的位置。有效手势优先于手动扩散设置；没有检测到手时自动恢复指针/触摸控制。
@@ -200,11 +216,11 @@ WASM 与应用同源加载，模型需要连接 `storage.googleapis.com`。若�
 
 ## GitHub Pages 部署（HTTPS）
 
-仓库附有 `.github/workflows/deploy.yml`。`main` 更新或手动触发时，工作流执行 `npm ci`、`npm test`、`npm run build`，再将 `dist` 发布到 Pages。部署会公开网站；以下为操作步骤，**不表示已经部署**。
+仓库附有 `.github/workflows/deploy.yml`。`main` 更新或手动触发时，工作流执行 `npm ci`、`npm test`、`npm run build`，再将 `dist` 发布到 Pages。4.0 通过功能分支 PR 审核后发布；以下说明不表示本次更新已经合并或部署。
 
 1. 将开发分支 PR 合并到 `main`。
 2. 在仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。
-3. 在 **Actions → Deploy to GitHub Pages → Run workflow** 中选择 `main` 手动触发；之后推送到 main 会自动构建部署。
+3. 合并到 `main` 后现有工作流会自动构建部署，无需额外手动触发。只有明确需要重跑时才在 Actions 选择相应的 main 运行记录。
 4. 等待 build 和 deploy 成功，从 Pages 设置或部署环境读取真实 HTTPS 地址。目标网址为 `https://qiu1112nov.github.io/UNFORM/`，以 GitHub 实际显示为准。
 5. 用手机与电脑打开地址，主动开启摄像头并验证张掌、握拳及拒绝授权回退。
 
@@ -220,11 +236,7 @@ Vite 使用 `base: '/UNFORM/'`，CSS、JavaScript、favicon 和 MediaPipe WASM �
 
 ## 分支与合并
 
-开发分支：`feat/unform-particle-art`。若尚未自动创建 PR，可在 GitHub 打开 **Pull requests → New pull request**，base 选 `main`，compare 选该分支。检查构建和交互后合并。也可在已登录的 GitHub CLI 运行：
-
-```sh
-gh pr create --base main --head feat/unform-particle-art --title "Build UNFORM gesture-driven particle art" --body "Adds a responsive Vite/Canvas particle experience, optional local hand tracking, tests and HTTPS deployment instructions."
-```
+4.0 开发分支：`feat/unform-4-sculpt-view`。发布 PR 的 base 为 `main`，标题为 **UNFORM 4.0 — FUSION & Interactive Geometry Major Update**。先检查是否已有同分支 PR，有则更新，避免重复创建；未创建时可使用 [GitHub 比较页面](https://github.com/qiu1112Nov/UNFORM/compare/main...feat/unform-4-sculpt-view?expand=1)。确认测试结果和上述摄像头待测风险后，由用户审核并决定合并。创建 PR 本身不部署；合并引起 main 更新才会触发正式 Pages 工作流，Cloudflare 仅用于预览。
 
 ## 项目结构
 
