@@ -260,3 +260,109 @@ for (const goal of [1, 0]) test(`projected particle ${goal ? 'opening' : 'gather
   }
   assert.ok(previous > 0.99);
 });
+
+// Projection coordinates are presentation data. Snapshot the underlying shape,
+// simulation and history to prove that observation cannot perform an edit.
+const artworkState = field => JSON.stringify({
+  time: field.time, form: field.form, dispersion: field.dispersion, inertia: field.inertia,
+  points: field.points.map(p => [p.home, p.position, p.target, [...p.world], p.motion, p.deformation, p.scatter, p.scatterMotion, p.flow && [...p.flow.position]]),
+  nodes: field.mesh.nodes, charge: [...field.weave.charge], damage: [...field.weave.damage],
+  layers: field.fragments, tracePositions: [...field.trace.positions], traceTimes: [...field.trace.times],
+  traceWeights: [...field.trace.weights], count: field.count, opacity: [...field.budget.opacity],
+});
+
+test('SCULPT is the default; VIEW only changes observation, even with camera and destructive inputs', t => {
+  const field = createField(t);
+  assert.equal(field.mode, 'SCULPT'); assert.equal(field.sculptHeld, false);
+  field.pointerDown(7, field.centerX, field.centerY, 0); field.update(0.3, 300);
+  assert.ok(field.weave.sources.size > 0);
+  const before = visiblePoints(field).map(p => [p.x, p.y]);
+  field.setMode('VIEW', 400);
+  assert.deepEqual(visiblePoints(field).map(p => [p.x, p.y]), before, 'switching does not jump the pose');
+  assert.equal(field.pointers.size, 0); assert.equal(field.weave.sources.size, 0);
+  const snapshot = artworkState(field), pool = field.points;
+  field.pointerMove(7, field.centerX + 100, field.centerY, 410); // old captured drag
+  assert.equal(field.viewYaw, 0);
+  field.pointerDown(10, 100, 100, 420); field.pointerMove(10, 180, 125, 450);
+  field.pointerDown(11, 200, 150, 455); field.pointerMove(11, 300, 200, 460);
+  field.setHand({ x: 0.8, y: 0.8, activation: 1, openness: 1, sampledAt: 470 });
+  field.tear({ x: 0, y: 0 }, { x: 400, y: 400 });
+  assert.equal(field.setForm('grid'), false); assert.equal(field.setDispersion(1), false); assert.equal(field.reset(), false);
+  for (let frame = 0; frame < 60; frame++) field.animate(500 + frame * 1000 / 60);
+  assert.ok(field.viewYaw !== 0 && field.viewPitch !== 0);
+  assert.ok(visiblePoints(field).some((p, i) => Math.hypot(p.x - before[i][0], p.y - before[i][1]) > 5));
+  assert.equal(artworkState(field), snapshot); assert.equal(field.points, pool);
+  assert.equal(field.hand, null); assert.equal(field.pointers.size, 0);
+});
+
+test('mode changes discard old drags and hold the pose until a new SCULPT press', t => {
+  const field = createField(t);
+  field.pointerDown(1, 160, 300, 0); field.setMode('VIEW', 100);
+  field.pointerDown(2, 160, 300, 120); field.pointerMove(2, 220, 310, 150);
+  const angle = field.viewYaw;
+  field.setMode('SCULPT', 200);
+  const snapshot = artworkState(field);
+  field.pointerMove(1, 300, 400, 210); field.pointerMove(2, 320, 410, 220); field.pointerUp(2);
+  field.pointerDown(3, 160, 300, 180); // queued before mode boundary
+  field.setHand(null);
+  for (let i = 0; i < 20; i++) field.animate(230 + i * 16);
+  assert.equal(field.sculptHeld, true); assert.equal(field.focus, null);
+  assert.equal(field.viewPointers.size, 0); assert.equal(field.pointers.size, 0);
+  assert.equal(artworkState(field), snapshot); assert.equal(field.viewYaw, angle);
+  field.pointerDown(3, field.centerX, field.centerY, 600);
+  assert.equal(field.sculptHeld, false); assert.equal(field.pointers.size, 1);
+  assert.equal(field.weave.sources.size, 1);
+  field.pointerUp(3); assert.equal(field.pointers.size, 0);
+});
+
+test('returning to SCULPT rejects cached/old hand packets and requires a new tracked sample', t => {
+  const field = createField(t);
+  const packet = { x: 0.5, y: 0.5, activation: 1, targetActivation: 1, openness: 1, tracked: true, sampledAt: 90 };
+  field.setHand(packet); field.update(0.1, 100);
+  field.setMode('VIEW', 120); field.setMode('SCULPT', 200);
+  const snapshot = artworkState(field);
+  assert.equal(field.setHand(packet), false);
+  assert.equal(field.setHand({ ...packet, sampledAt: 210, tracked: false }), false);
+  assert.equal(field.setHand({ ...packet, sampledAt: undefined }), false);
+  field.update(0.1, 220); assert.equal(artworkState(field), snapshot);
+  field.setHand({ ...packet, sampledAt: 230 }); assert.equal(field.sculptHeld, false);
+  assert.equal(field.setHand(packet), false, 'old packets remain rejected after rearming');
+  field.update(0.1, 240); assert.ok(field.fragments.states[0].value > 0);
+  assert.equal(field.setMode('SCULPT', 250), false, 'reselecting current mode does not interrupt live input');
+  assert.throws(() => field.setMode('UNKNOWN'), RangeError);
+});
+
+test('VIEW drag works while paused, keeps orientation through resize, and cancels cleanly', t => {
+  const field = createField(t);
+  field.paused = true; field.setMode('VIEW', 0);
+  const snapshot = artworkState(field), before = field.points[0].x;
+  field.pointerDown(1, 100, 200, 10); field.pointerMove(1, 170, 220, 20);
+  assert.notEqual(field.points[0].x, before); assert.equal(artworkState(field), snapshot);
+  const angle = field.viewYaw;
+  window.innerWidth = 844; window.innerHeight = 390; field.resize();
+  assert.equal(field.viewYaw, angle); assert.equal(field.dpr, 1.5);
+  field.clearPointers(); field.pointerMove(1, 290, 300, 30);
+  assert.equal(field.viewYaw, angle); assert.equal(artworkState(field), snapshot);
+});
+
+test('TRACE projects consistently after rotating in VIEW and resuming SCULPT', t => {
+  const field = createField(t), projected = { x: 0, y: 0 }, world = new Float32Array(3);
+  field.setMode('VIEW', 0); field.pointerDown(1, 50, 200, 1); field.pointerMove(1, 140, 220, 2);
+  field.setMode('SCULPT', 10);
+  let captures = 0;
+  for (let frame = 0; frame < 40; frame++) {
+    const now = 20 + frame * 40;
+    field.setHand({ x: 0.5 + Math.sin(frame * 0.4) * 0.3, y: 0.5, activation: 0, openness: 0, sampledAt: now });
+    field.time += 0.04; field.update(0.04, now);
+    for (let slot = 0; slot < field.trace.capacity; slot++) {
+      const index = slot * field.trace.samples + field.trace.heads[slot];
+      if (Math.abs(field.trace.times[index] - field.time) > 1e-6) continue;
+      for (let axis = 0; axis < 3; axis++) world[axis] = field.trace.positions[index * 3 + axis];
+      field.projectTracePoint(world, projected);
+      const point = field.points[field.trace.owners[slot]];
+      assert.ok(Math.hypot(projected.x - point.x, projected.y - point.y) < 0.001);
+      captures++;
+    }
+  }
+  assert.ok(captures > 0);
+});

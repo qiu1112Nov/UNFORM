@@ -16,7 +16,7 @@ export class AdaptiveQuality {
     this.recognitionPriority = false;
   }
   get count() { return this.mobile ? MOBILE_PERFORMANCE.tiers[this.level] : 1900; }
-  observe(intervalMs, updateMs, drawMs, inferenceMs = null) {
+  observe(intervalMs, updateMs, drawMs, inferenceMs = null, adapt = true) {
     this.updateMs = updateMs; this.drawMs = drawMs; this.inferenceMs = inferenceMs;
     if (!Number.isFinite(intervalMs) || intervalMs <= 0 || intervalMs > 250) return false;
     const dt = intervalMs / 1000, alpha = 1 - Math.exp(-dt);
@@ -24,7 +24,7 @@ export class AdaptiveQuality {
     this.frameEMA += (intervalMs - this.frameEMA) * alpha;
     this.workEMA += (updateMs + drawMs - this.workEMA) * alpha;
     this.fps = 1000 / this.frameEMA;
-    if (!this.mobile || this.age < MOBILE_PERFORMANCE.warmupSeconds) return false;
+    if (!adapt || !this.mobile || this.age < MOBILE_PERFORMANCE.warmupSeconds) return false;
     const slow = (!this.recognitionPriority && this.frameEMA > MOBILE_PERFORMANCE.slowFrameMs) || this.workEMA > MOBILE_PERFORMANCE.slowWorkMs;
     const fast = this.frameEMA < MOBILE_PERFORMANCE.fastFrameMs && this.workEMA < MOBILE_PERFORMANCE.fastWorkMs;
     this.slowAge = slow ? this.slowAge + dt : 0;

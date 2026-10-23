@@ -25,7 +25,7 @@ if (field) {
   inputMode.textContent = pointerMode;
   const captions = { octahedron: '06 VERTICES / 12 EDGES / 08 FACES', circle: 'ORBITAL FORM', lines: 'WAVE STUDY', grid: 'CARTESIAN FIELD' };
   const setForm = form => {
-    field.setForm(form);
+    if (field.setForm(form) === false) return;
     document.querySelectorAll('.form-button').forEach(button => {
       const active = button.dataset.form === form;
       button.classList.toggle('active', active); button.setAttribute('aria-pressed', active);
@@ -35,7 +35,7 @@ if (field) {
   };
   document.querySelectorAll('.form-button').forEach(button => button.addEventListener('click', () => setForm(button.dataset.form)));
   range.addEventListener('input', () => {
-    field.dispersion = Number(range.value) / 100;
+    if (field.setDispersion(Number(range.value) / 100) === false) return;
     $('#dispersion-value').value = `${range.value}%`;
     if (field.paused) { field.update(1); field.draw(); }
   });
@@ -49,7 +49,8 @@ if (field) {
   if (field.reducedMotion) status.textContent = 'Reduced motion: artwork paused. Press play to animate.';
   pause.addEventListener('click', () => { field.paused = !field.paused; field.last = 0; field.quality.resetTiming(); syncPause(); });
   $('#reset').addEventListener('click', () => {
-    field.reset(); setForm('octahedron'); syncParameters();
+    if (field.reset() === false) return;
+    setForm('octahedron'); syncParameters();
     if (field.paused) { field.update(1); field.draw(); }
     status.textContent = 'Hold to weave. Swipe to unravel. Release to reform.';
     field.resize();
@@ -68,7 +69,7 @@ if (field) {
   });
   canvas.addEventListener('pointerup', event => field.pointerUp(event.pointerId));
   for (const name of ['pointercancel', 'lostpointercapture']) canvas.addEventListener(name, event => {
-    if (field.pointers.has(event.pointerId)) field.pointerUp(event.pointerId, true);
+    if (field.pointers.has(event.pointerId) || field.viewPointers.has(event.pointerId)) field.pointerUp(event.pointerId, true);
   });
   canvas.addEventListener('pointerleave', () => { if (!field.pointers.size) field.focus = null; });
   window.addEventListener('blur', () => field.clearPointers());
@@ -87,13 +88,30 @@ if (field) {
     requestAnimationFrame(field.resize);
   }, hand => {
     field.inferenceMs = camera.metrics.inferenceMs;
-    field.quality.recognitionPriority = field.mobile && camera.active && camera.inputQuality.level > 0;
+    field.quality.recognitionPriority = field.mode === 'SCULPT' && field.mobile && camera.active && camera.inputQuality.level > 0;
     // Position filtering and confirmation run once upstream. Do not add an
     // openness EMA here: it delays both the trend and the spring response.
     field.setHand(hand);
     const label = gestureLabel(hand);
     if ($('#hand-status').textContent !== label) $('#hand-status').textContent = label;
   }, { mobile: field.mobile, renderStats: () => field.quality });
+  const modeButtons = document.querySelectorAll('[data-mode]');
+  modeButtons.forEach(button => button.addEventListener('click', () => {
+    if (button.dataset.mode === field.mode) return;
+    // End captures before discarding the associated pointer sessions. A held
+    // finger/mouse must lift and press again after changing modes.
+    for (const id of [...field.pointers.keys(), ...field.viewPointers.keys()]) {
+      if (canvas.hasPointerCapture(id)) canvas.releasePointerCapture(id);
+    }
+    field.setMode(button.dataset.mode);
+    camera.resetGestureInput();
+    field.quality.recognitionPriority = false;
+    modeButtons.forEach(control => control.setAttribute('aria-pressed', control.dataset.mode === field.mode));
+    const viewing = field.mode === 'VIEW';
+    document.body.dataset.mode = field.mode;
+    document.querySelectorAll('.form-button, #dispersion, #reset').forEach(control => { control.disabled = viewing; });
+    status.textContent = viewing ? 'VIEW / Drag to look around. Your form is held.' : 'SCULPT / Begin a new touch or hand gesture to continue.';
+  }));
   field.onGestureRendered = sample => camera.metrics.rendered(sample);
   const debugMode = new URLSearchParams(location.search).get('debug');
   if (debugMode === 'gestures' || debugMode === 'performance') {
@@ -106,7 +124,7 @@ if (field) {
     const timer = setInterval(() => {
       const metrics = camera.metrics.snapshot(performance.now());
       const diagnostic = camera.diagnostics();
-      const fidelity = `\nGesture: ${camera.response.confirmed === null ? 'unknown' : camera.response.confirmed ? 'open' : 'fist'} / ${camera.response.stage}\nTarget deconstruction: ${(field.targetActivation * field.dispersion * 100).toFixed(1)}%\nMotion: ${field.fragments.previewGoal === null ? 'formal' : 'preview'} / same layer springs\nActual layers: ${field.fragments.states.map(s => (s.value * field.dispersion * 100).toFixed(1)).join(' / ')}%\nCamera/model/inference: ${diagnostic.camera} / ${diagnostic.model} / ${diagnostic.inference}\nVideo ready/time: ${diagnostic.readyState} / ${Number(diagnostic.mediaTime).toFixed(3)}s\nFacing: requested user / actual ${diagnostic.facingMode}\nHand detected: ${diagnostic.hasHand} / last success: ${diagnostic.lastRecognitionAt === null ? 'never' : ((performance.now() - diagnostic.lastRecognitionAt) / 1000).toFixed(1) + 's ago'}\nError/fallback reason: ${diagnostic.error || 'none'}`;
+      const fidelity = `\nMode: ${field.mode}${field.sculptHeld ? ' / form held' : ''}\nGesture: ${camera.response.confirmed === null ? 'unknown' : camera.response.confirmed ? 'open' : 'fist'} / ${camera.response.stage}\nTarget deconstruction: ${(field.targetActivation * field.dispersion * 100).toFixed(1)}%\nMotion: ${field.fragments.previewGoal === null ? 'formal' : 'preview'} / same layer springs\nActual layers: ${field.fragments.states.map(s => (s.value * field.dispersion * 100).toFixed(1)).join(' / ')}%\nCamera/model/inference: ${diagnostic.camera} / ${diagnostic.model} / ${diagnostic.inference}\nVideo ready/time: ${diagnostic.readyState} / ${Number(diagnostic.mediaTime).toFixed(3)}s\nFacing: requested user / actual ${diagnostic.facingMode}\nHand detected: ${diagnostic.hasHand} / last success: ${diagnostic.lastRecognitionAt === null ? 'never' : ((performance.now() - diagnostic.lastRecognitionAt) / 1000).toFixed(1) + 's ago'}\nError/fallback reason: ${diagnostic.error || 'none'}`;
       const inferenceDetails = `\nInput: ${camera.input?.width ?? 0}×${camera.input?.height ?? 0} / camera ${camera.sourceWidth}×${camera.sourceHeight}\nCapture + bitmap: ${ms(camera.captureMs)}\nFrame → result: ${ms(camera.roundTripMs)}\nPacing interval: ${ms(camera.pump?.intervalMs ?? null)} / in flight: ${camera.pump?.busy ? 1 : 0}`;
       text.textContent = debugMode === 'performance'
         ? `FPS: ${(field.paused ? 0 : field.quality.fps).toFixed(1)}\nParticles: ${field.budget.length} visible / ${field.count} target / ${field.poolCount} pooled\nUpdate: ${ms(field.quality.updateMs)}\nDraw submission: ${ms(field.quality.drawMs)}\nMain work EMA: ${ms(field.quality.workEMA)}\nDPR: ${field.dpr.toFixed(2)} / quality: ${field.mobile ? field.quality.level : 'desktop'}\nTRACE samples: ${field.trace.samples}\nInference: ${ms(metrics.inferenceMs)} / ${camera.inferenceMode}\nCamera: ${metrics.cameraFPS.toFixed(1)} fps / inference: ${metrics.inferenceFPS.toFixed(1)} fps\n*CPU/Canvas submission; excludes display/compositor cost`

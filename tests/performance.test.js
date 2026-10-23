@@ -31,6 +31,16 @@ test('desktop quality stays unchanged and hidden/background gaps are ignored', (
   quality.observe(5000, 0, 0); assert.equal(quality.age, age);
 });
 
+test('observation keeps the visible budget fixed while still measuring frame and work metrics', () => {
+  const quality = new AdaptiveQuality(true);
+  for (let i = 0; i < 1000; i++) quality.observe(16.67, 1, 2, 10, false);
+  assert.equal(quality.count, 595);
+  assert.ok(quality.fps > 55); assert.equal(quality.updateMs, 1); assert.equal(quality.inferenceMs, 10);
+  quality.resetTiming();
+  for (let i = 0; i < 1000; i++) quality.observe(16.67, 1, 2);
+  assert.ok(quality.count > 595, 'SCULPT can resume the existing adaptive budget');
+});
+
 test('camera pressure first reduces recognition input, but expensive rendering can still reduce visuals', () => {
   const quality = new AdaptiveQuality(true);
   quality.recognitionPriority = true;

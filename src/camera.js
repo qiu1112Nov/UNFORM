@@ -20,7 +20,7 @@ export class HandCamera {
     this.video = video; this.onState = onState; this.onHand = onHand;
     this.mobile = mobile; this.renderStats = renderStats; this.workerSupported = workerSupported;
     this.createWorker = createWorker; this.createDetector = createDetector; this.clock = clock;
-    this.session = 0; this.active = false; this.requested = false;
+    this.inputEpoch = 0; this.session = 0; this.active = false; this.requested = false;
     this.stream = null; this.landmarker = null; this.pump = null; this.workerClient = null;
     this.response = new GestureResponse(); this.metrics = new GestureMetrics();
     this.inputQuality = new InferenceQuality(mobile);
@@ -93,8 +93,16 @@ export class HandCamera {
     }
   }
 
+  resetGestureInput() {
+    // Keep the camera/model/pump running; reject control results captured before
+    // this boundary, including an in-flight Worker frame.
+    this.inputEpoch++; this.response.reset();
+    this.metrics.responseId = null; this.metrics.confirmationMs = null;
+    this.metrics.animationStartMs = null; this.metrics.renderQueueMs = null; this.metrics.stage = 'waiting';
+  }
+
   // Both backends use this exact mapping/confirmation interface.
-  receive(result, inferenceMs, now, captureMs) {
+  receive(result, inferenceMs, now, captureMs, inputEpoch = this.inputEpoch) {
     const finished = this.clock();
     this.captureMs = captureMs; this.roundTripMs = finished - now; this.lastInferenceAt = finished;
     this.inputQuality.observe(finished, inferenceMs, this.roundTripMs, this.renderStats());
@@ -102,6 +110,9 @@ export class HandCamera {
     if (hand && !this.mirrored) hand.x = 1 - hand.x;
     this.hasHand = Boolean(hand); this.inferenceStage = hand ? 'hand detected' : 'running / no hand';
     if (hand) this.lastRecognitionAt = finished;
+    if (inputEpoch !== this.inputEpoch) {
+      this.metrics.inference(finished, inferenceMs, null, this.response); return;
+    }
     const response = this.response.update(hand, finished, now);
     if (response?.response && response.response.frameAt === undefined) response.response.frameAt = now;
     if (response) response.dispatchedAt = finished;
@@ -110,6 +121,7 @@ export class HandCamera {
 
   async processFrame(now, session) {
     if (session !== this.session || !this.active) return 0;
+    const inputEpoch = this.inputEpoch;
     let worker = null;
     try {
       this.sourceWidth = this.video.videoWidth; this.sourceHeight = this.video.videoHeight;
@@ -123,10 +135,10 @@ export class HandCamera {
       worker = this.workerClient;
       if (worker) {
         const result = await worker.detect(this.input, now);
-        if (session === this.session && this.active) this.receive(result, result.inferenceMs, now, preparedMs + result.bitmapMs);
+        if (session === this.session && this.active) this.receive(result, result.inferenceMs, now, preparedMs + result.bitmapMs, inputEpoch);
       } else {
         const started = this.clock(), result = this.landmarker.detectForVideo(this.input, now);
-        this.receive(result, this.clock() - started, now, preparedMs);
+        this.receive(result, this.clock() - started, now, preparedMs, inputEpoch);
       }
       return this.clock() - now;
     } catch (error) {

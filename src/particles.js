@@ -18,6 +18,7 @@ export class ParticleField {
     this.trace = new SpatialTrace(this.poolCount, this.mobile, this.mobile ? MOBILE_PERFORMANCE.traceSamples : undefined);
     this.traceWorldA = new Float32Array(3); this.traceWorldB = new Float32Array(3);
     this.traceCapture = new Float32Array(3);
+    this.traceSourceProjection = { x: 0, y: 0, depth: 0 };
     this.traceScreenA = { x: 0, y: 0 }; this.traceScreenB = { x: 0, y: 0 };
     this.mesh = buildSurfaceMesh(this.mobile ? 6 : 8);
     this.weave = new WeaveNetwork(this.mesh);
@@ -51,6 +52,8 @@ export class ParticleField {
     this.handYaw = { value: 0, velocity: 0 }; this.handPitch = { value: 0, velocity: 0 };
     this.centerMotionX = { value: 0, velocity: 0 }; this.centerMotionY = { value: 0, velocity: 0 };
     this.focus = null; this.hand = null; this.pointers = new Map();
+    this.mode = 'SCULPT'; this.sculptHeld = false; this.inputStartedAt = -Infinity;
+    this.viewPointers = new Map(); this.viewYaw = 0; this.viewPitch = 0;
     this.time = 0; this.paused = matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.reducedMotion = this.paused;
     this.frame = 0; this.last = 0;
@@ -89,13 +92,38 @@ export class ParticleField {
     this.projectAll(); this.draw();
   }
 
+  setMode(mode, now = performance.now()) {
+    if (mode !== 'SCULPT' && mode !== 'VIEW') throw new RangeError('Unknown interaction mode');
+    if (mode === this.mode) return false;
+    this.mode = mode; this.inputStartedAt = now; this.sculptHeld = true;
+    this.clearPointers(); this.hand = null; this.trace.hand(null, now);
+    this.pendingGesture = null; this.lastResponseId = null;
+    // Stop old motion without changing current positions, connectivity or pose.
+    for (const state of [this.activation, this.quickFeedback, this.handYaw, this.handPitch, this.centerMotionX, this.centerMotionY, ...this.fragments.states]) state.velocity = 0;
+    for (const point of this.points) {
+      point.deformation.velocity = 0; point.scatterMotion.velocity = 0;
+      for (const state of point.motion) state.velocity = 0;
+    }
+    this.last = 0; this.quality.resetTiming();
+    this.projectAll(); this.draw();
+    return true;
+  }
+
+  setDispersion(value) {
+    if (this.mode !== 'SCULPT') return false;
+    this.sculptHeld = false; this.dispersion = clamp(value); return true;
+  }
+
   setForm(form) {
+    if (this.mode !== 'SCULPT') return false;
+    this.sculptHeld = false;
     this.form = form; this.clearPointers(); this.weave.clear();
     this.trace.clear();
     this.points.forEach((p, i) => { p.target = form === 'octahedron' ? p.home : formPoint(form, i, this.poolCount); });
   }
 
   reset() {
+    if (this.mode !== 'SCULPT') return false;
     this.focus = null; this.setHand(null);
     this.dispersion = MOTION.deconstructionStrength; this.inertia = MOTION.motionInertia;
     this.setForm('octahedron');
@@ -111,6 +139,13 @@ export class ParticleField {
   }
 
   setHand(hand) {
+    if (this.mode !== 'SCULPT') return false;
+    const sampledAt = hand?.sampledAt ?? hand?.dispatchedAt;
+    if (Number.isFinite(sampledAt) && sampledAt < this.inputStartedAt) return false;
+    if (this.sculptHeld) {
+      if (!hand || hand.tracked === false || !Number.isFinite(sampledAt) || sampledAt < this.inputStartedAt) return false;
+      this.sculptHeld = false;
+    }
     this.hand = hand;
     this.trace.hand(hand, hand?.dispatchedAt ?? performance.now());
     if (!hand) { this.pendingGesture = null; this.lastResponseId = null; return; }
@@ -123,6 +158,9 @@ export class ParticleField {
   }
 
   pointerDown(id, x, y, now) {
+    if (now < this.inputStartedAt) return;
+    if (this.mode === 'VIEW') { this.viewPointers.set(id, { x, y }); return; }
+    this.sculptHeld = false;
     const point = { x, y, time: now, quiet: 0, tearing: false };
     this.pointers.set(id, point); this.focus = point;
     if (this.form === 'octahedron') {
@@ -132,6 +170,20 @@ export class ParticleField {
   }
 
   pointerMove(id, x, y, now) {
+    if (now < this.inputStartedAt) return;
+    if (this.mode === 'VIEW') {
+      const previous = this.viewPointers.get(id);
+      if (!previous) return;
+      if (id === this.viewPointers.keys().next().value) {
+        const sensitivity = Math.PI * 1.2 / Math.max(200, Math.min(this.width, this.height));
+        this.viewYaw = (this.viewYaw + (x - previous.x) * sensitivity) % (Math.PI * 2);
+        this.viewPitch = clamp(this.viewPitch + (y - previous.y) * sensitivity, -1.3, 1.3);
+      }
+      previous.x = x; previous.y = y;
+      if (this.paused) { this.projectAll(); this.draw(); }
+      return;
+    }
+    if (this.sculptHeld) return;
     const previous = this.pointers.get(id);
     this.focus = { x, y };
     if (!previous) return;
@@ -148,16 +200,18 @@ export class ParticleField {
   }
 
   pointerUp(id, cancelled = false) {
+    if (this.mode === 'VIEW') { this.viewPointers.delete(id); return; }
     if (cancelled) this.weave.cancel(id); else this.weave.release(id);
     this.pointers.delete(id);
     this.focus = this.pointers.size ? [...this.pointers.values()][0] : null;
   }
 
   clearPointers() {
-    this.pointers.clear(); this.weave.sources.clear(); this.focus = null;
+    this.pointers.clear(); this.viewPointers.clear(); this.weave.sources.clear(); this.focus = null;
   }
 
   tear(a, b) {
+    if (this.mode !== 'SCULPT' || this.sculptHeld) return;
     const radius = Math.max(24, this.scale * 0.24) * (0.65 + this.dispersion * 0.7);
     const damaged = [];
     this.nodeScreens.forEach((node, i) => {
@@ -177,10 +231,11 @@ export class ParticleField {
     this.last = now;
     if (!this.paused) {
       const started = performance.now();
-      this.time += dt; this.update(dt, now);
+      if (this.mode === 'SCULPT' && !this.sculptHeld) this.time += dt;
+      this.update(dt, now);
       const updated = performance.now(); this.draw();
       const drawn = performance.now();
-      if (this.quality.observe(interval, updated - started, drawn - updated, this.inferenceMs)) this.setParticleCount(this.quality.count);
+      if (this.quality.observe(interval, updated - started, drawn - updated, this.inferenceMs, this.mode === 'SCULPT' && !this.sculptHeld)) this.setParticleCount(this.quality.count);
       const pending = this.pendingGesture;
       // A rendering proxy excludes idle rotation: it measures gesture-driven
       // deformation, approximately >=0.5 CSS px, after Canvas commands submit.
@@ -200,6 +255,7 @@ export class ParticleField {
   }
 
   update(dt, now = performance.now()) {
+    if (this.mode === 'VIEW' || this.sculptHeld) { this.projectAll(); return; }
     if (this.hand?.validUntil !== undefined && now > this.hand.validUntil) this.setHand(null);
     this.budget.advance(dt);
     const coefficients = springCoefficients(dt, this.inertia);
@@ -273,19 +329,31 @@ export class ParticleField {
       if (!this.budget.selected[this.trace.owners[slot]]) continue;
       // Preserve the scene pose at capture time, including hand translation.
       // Object-local history would move with the sculpture and erase its trail.
-      const inversePerspective = (4.5 - p.depth) / 4.5;
-      this.traceCapture[0] = (p.x - this.originX) / this.scale * inversePerspective;
-      this.traceCapture[1] = -(p.y - this.originY) / this.scale * inversePerspective;
-      this.traceCapture[2] = p.depth;
+      let source = p;
+      if (this.viewRotated) { this.project(p.world, this.traceSourceProjection, false); source = this.traceSourceProjection; }
+      const inversePerspective = (4.5 - source.depth) / 4.5;
+      this.traceCapture[0] = (source.x - this.originX) / this.scale * inversePerspective;
+      this.traceCapture[1] = -(source.y - this.originY) / this.scale * inversePerspective;
+      this.traceCapture[2] = source.depth;
       this.trace.capture(slot, this.traceCapture, this.time, p.traceWeight * this.budget.opacity[this.trace.owners[slot]]);
     }
   }
 
-  project(point, destination) {
+  project(point, destination, observe = true) {
     const x = point[0] * this.yawCos + point[2] * this.yawSin;
     const z = -point[0] * this.yawSin + point[2] * this.yawCos;
     const y = point[1] * this.pitchCos - z * this.pitchSin;
     const depth = point[1] * this.pitchSin + z * this.pitchCos;
+    this.projectScene(x, y, depth, destination, observe);
+  }
+
+  projectScene(x, y, depth, destination, observe = true) {
+    if (observe && this.viewRotated) {
+      const rotatedX = x * this.viewYawCos + depth * this.viewYawSin;
+      const rotatedZ = -x * this.viewYawSin + depth * this.viewYawCos;
+      depth = y * this.viewPitchSin + rotatedZ * this.viewPitchCos;
+      y = y * this.viewPitchCos - rotatedZ * this.viewPitchSin; x = rotatedX;
+    }
     const perspective = 4.5 / (4.5 - depth);
     destination.x = this.centerX + x * this.scale * perspective;
     destination.y = this.centerY - y * this.scale * perspective;
@@ -293,6 +361,10 @@ export class ParticleField {
   }
 
   projectAll() {
+    this.viewRotated = this.viewYaw !== 0 || this.viewPitch !== 0;
+    this.viewYawCos = Math.cos(this.viewYaw); this.viewYawSin = Math.sin(this.viewYaw);
+    this.viewPitchCos = Math.cos(this.viewPitch); this.viewPitchSin = Math.sin(this.viewPitch);
+    const frozen = this.mode === 'VIEW' || this.sculptHeld;
     const yaw = this.time * 0.075 + 0.6 + this.handYaw.value, pitch = -0.12 + Math.sin(this.time * 0.1) * 0.035 + this.handPitch.value;
     this.yawCos = Math.cos(yaw); this.yawSin = Math.sin(yaw);
     this.pitchCos = Math.cos(pitch); this.pitchSin = Math.sin(pitch);
@@ -304,6 +376,7 @@ export class ParticleField {
     for (let slot = 0; slot < this.budget.length; slot++) {
       const i = this.budget.indices[slot];
       const p = this.points[i];
+      if (frozen) { this.project(p.world, p); continue; }
       const anchor = this.form === 'octahedron' && p.kind === 'edge' && retained(i, this.dispersion);
       const amount = (clamp(p.deformation.value) * p.radius * (anchor ? 0.08 : 1) + clamp(p.scatterMotion.value)) * this.dispersion;
       const drift = this.form === 'octahedron' && p.kind === 'interior' ? 0.009 : 0.001;
@@ -344,6 +417,14 @@ export class ParticleField {
   }
 
   projectTracePoint(point, destination) {
+    if (this.viewRotated) {
+      // TRACE history already contains scene rotation and screen translation;
+      // remove only the latter before applying the observation transform once.
+      const inversePerspective = (4.5 - point[2]) / 4.5;
+      this.projectScene(point[0] - (this.centerX - this.originX) / this.scale * inversePerspective,
+        point[1] + (this.centerY - this.originY) / this.scale * inversePerspective, point[2], destination);
+      return;
+    }
     const perspective = 4.5 / (4.5 - point[2]);
     destination.x = this.originX + point[0] * this.scale * perspective;
     destination.y = this.originY - point[1] * this.scale * perspective;
